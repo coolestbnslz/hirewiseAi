@@ -1,22 +1,18 @@
 /**
- * Embeddings service using Amazon Bedrock Titan Embeddings
+ * Embeddings service using Amazon Bedrock Titan Embeddings (REST API)
  * Used for semantic tag matching and similarity calculations
  */
 
-import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
+import aws4 from 'aws4';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
-const bedrockClient = new BedrockRuntimeClient({
-  region: process.env.AWS_REGION || 'us-east-1',
-  ...(process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY ? {
-    credentials: {
-      accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-    },
-  } : {}),
-});
+// AWS Bedrock configuration
+const AWS_REGION = process.env.AWS_REGION || 'us-east-1';
+const AWS_ACCESS_KEY_ID = process.env.AWS_ACCESS_KEY_ID;
+const AWS_SECRET_ACCESS_KEY = process.env.AWS_SECRET_ACCESS_KEY;
+const BEDROCK_ENDPOINT = `https://bedrock-runtime.${AWS_REGION}.amazonaws.com`;
 
 // Titan Embeddings model ID
 const EMBEDDING_MODEL_ID = process.env.BEDROCK_EMBEDDING_MODEL_ID || 'amazon.titan-embed-text-v1';
@@ -108,7 +104,7 @@ const COMMON_TAGS = [
 ];
 
 /**
- * Generate embedding for a text using Amazon Bedrock Titan Embeddings
+ * Generate embedding for a text using Amazon Bedrock Titan Embeddings REST API
  */
 export async function generateEmbedding(text) {
   try {
@@ -116,17 +112,67 @@ export async function generateEmbedding(text) {
       throw new Error('Text must be a non-empty string');
     }
 
-    const command = new InvokeModelCommand({
-      modelId: EMBEDDING_MODEL_ID,
-      contentType: 'application/json',
-      accept: 'application/json',
-      body: JSON.stringify({
-        inputText: text,
-      }),
+    // Validate credentials
+    if (!AWS_ACCESS_KEY_ID || !AWS_SECRET_ACCESS_KEY) {
+      throw new Error('AWS credentials not configured. Please set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY in your .env file.');
+    }
+
+    const body = {
+      inputText: text,
+    };
+
+    const bodyString = JSON.stringify(body);
+    const url = new URL(`${BEDROCK_ENDPOINT}/model/${EMBEDDING_MODEL_ID}/invoke`);
+    
+    const request = {
+      host: url.hostname,
+      path: url.pathname,
+      method: 'POST',
+      service: 'bedrock',
+      region: AWS_REGION,
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      body: bodyString,
+    };
+
+    // Sign the request with AWS Signature Version 4
+    const signedRequest = aws4.sign(request, {
+      accessKeyId: AWS_ACCESS_KEY_ID,
+      secretAccessKey: AWS_SECRET_ACCESS_KEY,
     });
 
-    const response = await bedrockClient.send(command);
-    const responseBody = JSON.parse(new TextDecoder().decode(response.body));
+    // Make the HTTP request
+    const response = await fetch(url.toString(), {
+      method: signedRequest.method,
+      headers: signedRequest.headers,
+      body: signedRequest.body,
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      let errorData;
+      try {
+        errorData = JSON.parse(errorText);
+      } catch {
+        errorData = { message: errorText };
+      }
+
+      if (response.status === 403) {
+        throw new Error('Access denied to Bedrock. Please ensure your IAM user has Bedrock permissions and model access is enabled.');
+      }
+      if (response.status === 400) {
+        throw new Error(`Invalid Bedrock model ID: ${EMBEDDING_MODEL_ID}. Please check BEDROCK_EMBEDDING_MODEL_ID in your .env file. ${errorData.message || ''}`);
+      }
+      if (response.status === 401) {
+        throw new Error('AWS credentials invalid. Please check AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY in your .env file.');
+      }
+
+      throw new Error(`Bedrock API error (${response.status}): ${errorData.message || errorText}`);
+    }
+
+    const responseBody = await response.json();
 
     // Titan embeddings v1 returns embedding in the response
     // Format: { "embedding": [0.1, 0.2, ...] }

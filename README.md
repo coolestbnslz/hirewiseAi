@@ -52,11 +52,10 @@ Then edit `.env` and update with your actual values:
 PORT=3000
 MONGODB_URI=mongodb://localhost:27017/hirewise
 
-# AWS Bedrock Configuration
+# AWS Bedrock Configuration (using Converse API with Bearer token)
 AWS_REGION=us-east-1
-AWS_ACCESS_KEY_ID=your_access_key_id
-AWS_SECRET_ACCESS_KEY=your_secret_access_key
-BEDROCK_MODEL_ID=anthropic.claude-3-sonnet-20240229-v1:0
+AWS_BEARER_TOKEN_BEDROCK=your_bearer_token
+BEDROCK_MODEL_ID=us.anthropic.claude-3-5-haiku-20241022-v1:0
 BEDROCK_EMBEDDING_MODEL_ID=amazon.titan-embed-text-v1
 
 # SMTP Email Configuration
@@ -75,8 +74,8 @@ SMTP_FROM_NAME=HireWise Team
 2. **AWS Bedrock**: 
    - Create an AWS account if you don't have one
    - Enable Bedrock access (request access to Claude models and Titan Embeddings)
-   - Create an IAM user with Bedrock permissions
-   - Set `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`
+   - Create a Bearer token in AWS Console → Amazon Bedrock → API Keys
+   - Set `AWS_BEARER_TOKEN_BEDROCK` in your `.env` file
 3. **Email (SMTP)**: 
    - For Gmail: Enable 2FA and generate an App Password
    - Set `SMTP_USERNAME` and `SMTP_PASSWORD`
@@ -369,14 +368,23 @@ The system supports **two LLM providers**:
    - Or create a custom policy with Bedrock permissions
    - Create Access Key ID and Secret Access Key
 
-3. **Configure Environment Variables:**
+3. **Get Bearer Token:**
+   - Go to AWS Console → Amazon Bedrock → API Keys
+   - Create a new API key (Bearer token)
+   - Copy the token (you won't be able to see it again)
+
+4. **Configure Environment Variables:**
    ```bash
    LLM_PROVIDER=bedrock
    AWS_REGION=us-east-1
-   AWS_ACCESS_KEY_ID=your_access_key_id
-   AWS_SECRET_ACCESS_KEY=your_secret_access_key
-   BEDROCK_MODEL_ID=anthropic.claude-3-sonnet-20240229-v1:0
+   AWS_BEARER_TOKEN_BEDROCK=your_bearer_token
+   BEDROCK_MODEL_ID=us.anthropic.claude-3-5-haiku-20241022-v1:0
    ```
+
+**Note:** The Converse API uses Bearer token authentication, which is simpler than AWS Signature V4. You can also use model IDs like:
+- `us.anthropic.claude-3-5-haiku-20241022-v1:0` (Claude 3.5 Haiku)
+- `us.anthropic.claude-3-5-sonnet-20241022-v1:0` (Claude 3.5 Sonnet)
+- `us.anthropic.claude-3-opus-20240229-v1:0` (Claude 3 Opus)
 
 ### Option 2: Using OpenAI (GPT-4o, GPT-4, etc.)
 

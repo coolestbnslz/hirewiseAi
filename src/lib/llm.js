@@ -1,10 +1,9 @@
 /**
  * LLM integration supporting both AWS Bedrock and OpenAI
- * - AWS Bedrock: Claude, Titan, AI21, Cohere, Llama models
+ * - AWS Bedrock: Claude, Titan, AI21, Cohere, Llama models (using REST API)
  * - OpenAI: GPT-4o, GPT-4, GPT-3.5 models
  */
 
-import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -12,41 +11,33 @@ dotenv.config();
 // LLM Provider selection
 const LLM_PROVIDER = process.env.LLM_PROVIDER || 'bedrock'; // 'bedrock' or 'openai'
 
-// Initialize Bedrock client
-// If credentials are not provided, AWS SDK will try to use default credential chain
-// (environment variables, IAM role, ~/.aws/credentials, etc.)
-const bedrockClient = new BedrockRuntimeClient({
-  region: process.env.AWS_REGION || 'us-east-1',
-  ...(process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY ? {
-    credentials: {
-      accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-    },
-  } : {}),
-});
+// AWS Bedrock configuration
+const AWS_REGION = process.env.AWS_REGION || 'us-east-1';
+const AWS_BEARER_TOKEN_BEDROCK = process.env.AWS_BEARER_TOKEN_BEDROCK;
+const BEDROCK_ENDPOINT = `https://bedrock-runtime.${AWS_REGION}.amazonaws.com`;
 
 // Model configuration - can use different models for different tasks
 // Supports both Bedrock and OpenAI models
 const MODEL_CONFIG = {
   // Critical tasks requiring highest accuracy (resume scoring, video scoring)
-  CRITICAL: process.env.LLM_MODEL_CRITICAL || (LLM_PROVIDER === 'openai' 
+  CRITICAL: process.env.LLM_MODEL_CRITICAL || process.env.BEDROCK_MODEL_CRITICAL || (LLM_PROVIDER === 'openai' 
     ? 'gpt-4o' 
-    : 'anthropic.claude-3-opus-20240229-v1:0'),
+    : 'us.anthropic.claude-3-opus-20240229-v1:0'),
   
   // Standard tasks (JD enhancement, email generation, screening questions)
-  STANDARD: process.env.LLM_MODEL_STANDARD || (LLM_PROVIDER === 'openai' 
+  STANDARD: process.env.LLM_MODEL_STANDARD || process.env.BEDROCK_MODEL_STANDARD || (LLM_PROVIDER === 'openai' 
     ? 'gpt-4o' 
-    : 'anthropic.claude-3-sonnet-20240229-v1:0'),
+    : 'us.anthropic.claude-3-5-sonnet-20241022-v1:0'),
   
   // Simple/fast tasks (compensation analysis, github scoring)
-  FAST: process.env.LLM_MODEL_FAST || (LLM_PROVIDER === 'openai' 
+  FAST: process.env.LLM_MODEL_FAST || process.env.BEDROCK_MODEL_FAST || (LLM_PROVIDER === 'openai' 
     ? 'gpt-4o-mini' 
-    : 'anthropic.claude-3-haiku-20240307-v1:0'),
+    : 'us.anthropic.claude-3-5-haiku-20241022-v1:0'),
   
   // Default fallback
-  DEFAULT: process.env.LLM_MODEL_ID || (LLM_PROVIDER === 'openai' 
+  DEFAULT: process.env.LLM_MODEL_ID || process.env.BEDROCK_MODEL_ID || (LLM_PROVIDER === 'openai' 
     ? 'gpt-4o' 
-    : 'anthropic.claude-3-sonnet-20240229-v1:0'),
+    : 'us.anthropic.claude-3-5-sonnet-20241022-v1:0'),
 };
 
 /**
@@ -361,7 +352,8 @@ async function callOpenAI(prompt, systemPrompt = null, modelId = null, temperatu
 }
 
 /**
- * Call Amazon Bedrock with a prompt
+ * Call Amazon Bedrock Converse API with a prompt
+ * Uses Bearer token authentication
  * @param {string} prompt - The user prompt
  * @param {string} systemPrompt - Optional system prompt
  * @param {string} modelId - Optional model ID (defaults to STANDARD)
@@ -369,52 +361,95 @@ async function callOpenAI(prompt, systemPrompt = null, modelId = null, temperatu
  */
 async function callBedrock(prompt, systemPrompt = null, modelId = null, temperature = 0.7) {
   try {
-    const messages = [
-      {
-        role: 'user',
-        content: prompt,
-      },
-    ];
-
-    const body = {
-      anthropic_version: 'bedrock-2023-05-31',
-      max_tokens: 4096,
-      messages,
-      temperature,
-    };
-
-    if (systemPrompt) {
-      body.system = systemPrompt;
+    // Validate credentials
+    if (!AWS_BEARER_TOKEN_BEDROCK) {
+      throw new Error('AWS Bearer token not configured. Please set AWS_BEARER_TOKEN_BEDROCK in your .env file.');
     }
 
     // Use provided model or default to STANDARD
     const selectedModel = modelId || MODEL_CONFIG.STANDARD;
 
-    const command = new InvokeModelCommand({
-      modelId: selectedModel,
-      contentType: 'application/json',
-      accept: 'application/json',
+    // Prepare messages in Converse API format
+    const messages = [
+      {
+        role: 'user',
+        content: [{ text: prompt }],
+      },
+    ];
+
+    const body = {
+      messages,
+      inferenceConfig: {
+        maxTokens: 4096,
+        temperature,
+      },
+    };
+
+    // Add system prompt if provided
+    if (systemPrompt) {
+      body.system = [{ text: systemPrompt }];
+    }
+
+    // Prepare request URL
+    const url = `${BEDROCK_ENDPOINT}/model/${selectedModel}/converse`;
+
+    // Make the HTTP request with Bearer token
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${AWS_BEARER_TOKEN_BEDROCK}`,
+      },
       body: JSON.stringify(body),
     });
 
-    const response = await bedrockClient.send(command);
-    const responseBody = JSON.parse(new TextDecoder().decode(response.body));
+    if (!response.ok) {
+      const errorText = await response.text();
+      let errorData;
+      try {
+        errorData = JSON.parse(errorText);
+      } catch {
+        errorData = { message: errorText };
+      }
 
-    // Extract text from Claude's response
-    const text = responseBody.content?.[0]?.text || '';
+      // Provide helpful error messages
+      if (response.status === 403) {
+        throw new Error('Access denied to Bedrock. Please ensure your Bearer token has Bedrock permissions and model access is enabled.');
+      }
+      if (response.status === 400) {
+        throw new Error(`Invalid Bedrock model ID: ${selectedModel}. Please check your model configuration. ${errorData.message || ''}`);
+      }
+      if (response.status === 401) {
+        throw new Error('AWS Bearer token invalid. Please check AWS_BEARER_TOKEN_BEDROCK in your .env file.');
+      }
+
+      throw new Error(`Bedrock API error (${response.status}): ${errorData.message || errorText}`);
+    }
+
+    const responseBody = await response.json();
+
+    // Extract text from Converse API response
+    // Response format: { "output": { "message": { "content": [{ "text": "..." }] } } }
+    const text = responseBody.output?.message?.content?.[0]?.text || '';
+    
+    if (!text) {
+      console.warn('[Bedrock] Empty response from model:', responseBody);
+      throw new Error('Empty response from Bedrock model');
+    }
+
     return text;
   } catch (error) {
     console.error('[Bedrock] Error calling model:', error);
     
-    // Provide helpful error messages
-    if (error.name === 'UnrecognizedClientException' || error.message?.includes('credentials')) {
-      throw new Error('AWS credentials not configured. Please set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY in your .env file.');
+    // Re-throw with better error messages
+    if (error.message.includes('Bearer token')) {
+      throw error;
     }
-    if (error.name === 'ValidationException' || error.message?.includes('model')) {
-      throw new Error(`Invalid Bedrock model ID: ${modelId || MODEL_CONFIG.STANDARD}. Please check BEDROCK_MODEL_ID in your .env file.`);
+    if (error.message.includes('Access denied') || error.message.includes('403')) {
+      throw error;
     }
-    if (error.name === 'AccessDeniedException') {
-      throw new Error('Access denied to Bedrock. Please ensure your IAM user has Bedrock permissions and model access is enabled.');
+    if (error.message.includes('Invalid Bedrock model')) {
+      throw error;
     }
     
     throw new Error(`Bedrock API error: ${error.message}`);
