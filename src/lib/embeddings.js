@@ -1,17 +1,15 @@
 /**
- * Embeddings service using Amazon Bedrock Titan Embeddings (REST API)
+ * Embeddings service using Amazon Bedrock Titan Embeddings (REST API with Bearer token)
  * Used for semantic tag matching and similarity calculations
  */
 
-import aws4 from 'aws4';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
 // AWS Bedrock configuration
 const AWS_REGION = process.env.AWS_REGION || 'us-east-1';
-const AWS_ACCESS_KEY_ID = process.env.AWS_ACCESS_KEY_ID;
-const AWS_SECRET_ACCESS_KEY = process.env.AWS_SECRET_ACCESS_KEY;
+const AWS_BEARER_TOKEN_BEDROCK = process.env.AWS_BEARER_TOKEN_BEDROCK;
 const BEDROCK_ENDPOINT = `https://bedrock-runtime.${AWS_REGION}.amazonaws.com`;
 
 // Titan Embeddings model ID
@@ -105,6 +103,7 @@ const COMMON_TAGS = [
 
 /**
  * Generate embedding for a text using Amazon Bedrock Titan Embeddings REST API
+ * Uses Bearer token authentication (same as Converse API)
  */
 export async function generateEmbedding(text) {
   try {
@@ -113,41 +112,26 @@ export async function generateEmbedding(text) {
     }
 
     // Validate credentials
-    if (!AWS_ACCESS_KEY_ID || !AWS_SECRET_ACCESS_KEY) {
-      throw new Error('AWS credentials not configured. Please set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY in your .env file.');
+    if (!AWS_BEARER_TOKEN_BEDROCK) {
+      throw new Error('AWS Bearer token not configured. Please set AWS_BEARER_TOKEN_BEDROCK in your .env file.');
     }
 
+    // Titan Embeddings API expects inputText as an array
     const body = {
-      inputText: text,
+      inputText: [text],
     };
 
-    const bodyString = JSON.stringify(body);
-    const url = new URL(`${BEDROCK_ENDPOINT}/model/${EMBEDDING_MODEL_ID}/invoke`);
-    
-    const request = {
-      host: url.hostname,
-      path: url.pathname,
+    // Prepare request URL (embeddings use /invoke endpoint, not /converse)
+    const url = `${BEDROCK_ENDPOINT}/model/${EMBEDDING_MODEL_ID}/invoke`;
+
+    // Make the HTTP request with Bearer token
+    const response = await fetch(url, {
       method: 'POST',
-      service: 'bedrock',
-      region: AWS_REGION,
       headers: {
         'Content-Type': 'application/json',
-        'Accept': 'application/json',
+        'Authorization': `Bearer ${AWS_BEARER_TOKEN_BEDROCK}`,
       },
-      body: bodyString,
-    };
-
-    // Sign the request with AWS Signature Version 4
-    const signedRequest = aws4.sign(request, {
-      accessKeyId: AWS_ACCESS_KEY_ID,
-      secretAccessKey: AWS_SECRET_ACCESS_KEY,
-    });
-
-    // Make the HTTP request
-    const response = await fetch(url.toString(), {
-      method: signedRequest.method,
-      headers: signedRequest.headers,
-      body: signedRequest.body,
+      body: JSON.stringify(body),
     });
 
     if (!response.ok) {
@@ -160,13 +144,13 @@ export async function generateEmbedding(text) {
       }
 
       if (response.status === 403) {
-        throw new Error('Access denied to Bedrock. Please ensure your IAM user has Bedrock permissions and model access is enabled.');
+        throw new Error('Access denied to Bedrock. Please ensure your Bearer token has Bedrock permissions and model access is enabled.');
       }
       if (response.status === 400) {
         throw new Error(`Invalid Bedrock model ID: ${EMBEDDING_MODEL_ID}. Please check BEDROCK_EMBEDDING_MODEL_ID in your .env file. ${errorData.message || ''}`);
       }
       if (response.status === 401) {
-        throw new Error('AWS credentials invalid. Please check AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY in your .env file.');
+        throw new Error('AWS Bearer token invalid. Please check AWS_BEARER_TOKEN_BEDROCK in your .env file.');
       }
 
       throw new Error(`Bedrock API error (${response.status}): ${errorData.message || errorText}`);
@@ -174,9 +158,10 @@ export async function generateEmbedding(text) {
 
     const responseBody = await response.json();
 
-    // Titan embeddings v1 returns embedding in the response
-    // Format: { "embedding": [0.1, 0.2, ...] }
-    const embedding = responseBody.embedding || responseBody.embeddingVector || responseBody.embeddings?.[0];
+    // Titan embeddings returns embedding in the response
+    // Format: { "embedding": [[0.1, 0.2, ...]] } (array of arrays, one per input text)
+    // Since we send one text, we get one embedding array
+    const embedding = responseBody.embedding?.[0] || responseBody.embeddingVector || responseBody.embeddings?.[0];
     
     if (!embedding || !Array.isArray(embedding)) {
       console.error('[Embeddings] Unexpected response format:', responseBody);

@@ -79,7 +79,23 @@ export async function verifyEmailConnection() {
     return { ok: true };
   } catch (error) {
     console.error('[EMAIL] SMTP verification failed:', error);
-    return { ok: false, error: error.message };
+    
+    // Provide helpful error messages for common issues
+    let helpfulError = error.message;
+    if (error.code === 'EAUTH' || error.responseCode === 535) {
+      if (SMTP_CONFIG.host === 'smtp.gmail.com') {
+        helpfulError = 'Gmail authentication failed. You need to use an App Password, not your regular Gmail password.\n' +
+          'Steps to fix:\n' +
+          '1. Enable 2-Factor Authentication on your Google Account\n' +
+          '2. Go to Google Account → Security → 2-Step Verification → App passwords\n' +
+          '3. Generate a new App Password for "Mail"\n' +
+          '4. Use the 16-character App Password in SMTP_PASSWORD (not your regular password)';
+      } else {
+        helpfulError = 'SMTP authentication failed. Please check your username and password.';
+      }
+    }
+    
+    return { ok: false, error: helpfulError };
   }
 }
 
@@ -139,8 +155,17 @@ export async function sendEmail({ to, subject, html, text, from }) {
     
     // Provide helpful error messages
     let errorMessage = error.message;
-    if (error.code === 'EAUTH') {
-      errorMessage = 'SMTP authentication failed. Please check your username and password.';
+    if (error.code === 'EAUTH' || error.responseCode === 535) {
+      if (SMTP_CONFIG.host === 'smtp.gmail.com') {
+        errorMessage = 'Gmail authentication failed. You need to use an App Password, not your regular Gmail password.\n' +
+          'Steps to fix:\n' +
+          '1. Enable 2-Factor Authentication on your Google Account\n' +
+          '2. Go to Google Account → Security → 2-Step Verification → App passwords\n' +
+          '3. Generate a new App Password for "Mail"\n' +
+          '4. Use the 16-character App Password in SMTP_PASSWORD (not your regular password)';
+      } else {
+        errorMessage = 'SMTP authentication failed. Please check your username and password.';
+      }
     } else if (error.code === 'ECONNECTION') {
       errorMessage = `Cannot connect to SMTP server ${SMTP_CONFIG.host}:${SMTP_CONFIG.port}. Check your SMTP settings.`;
     } else if (error.code === 'ETIMEDOUT') {

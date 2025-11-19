@@ -48,10 +48,15 @@ async function startServer() {
     // Verify email connection (non-blocking)
     verifyEmailConnection().then(result => {
       if (result.ok) {
-        console.log('[Server] Email service ready');
+        console.log('[Server] ✅ Email service ready');
       } else {
-        console.warn('[Server] Email service not configured:', result.error);
-        console.warn('[Server] Set SMTP_USERNAME and SMTP_PASSWORD to enable email sending');
+        console.warn('[Server] ⚠️  Email service not configured');
+        // Only show detailed error if it's not just missing credentials
+        if (result.error && !result.error.includes('not configured')) {
+          console.warn('[Server] Error:', result.error);
+        } else {
+          console.warn('[Server] Set SMTP_USERNAME and SMTP_PASSWORD in .env to enable email sending');
+        }
       }
     }).catch(err => {
       console.warn('[Server] Email verification failed:', err.message);

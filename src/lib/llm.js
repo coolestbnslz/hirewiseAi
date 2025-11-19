@@ -18,26 +18,27 @@ const BEDROCK_ENDPOINT = `https://bedrock-runtime.${AWS_REGION}.amazonaws.com`;
 
 // Model configuration - can use different models for different tasks
 // Supports both Bedrock and OpenAI models
+// IMPORTANT: Model selection is based on LLM_PROVIDER to ensure correct model type
 const MODEL_CONFIG = {
   // Critical tasks requiring highest accuracy (resume scoring, video scoring)
-  CRITICAL: process.env.LLM_MODEL_CRITICAL || process.env.BEDROCK_MODEL_CRITICAL || (LLM_PROVIDER === 'openai' 
-    ? 'gpt-4o' 
-    : 'us.anthropic.claude-3-opus-20240229-v1:0'),
+  CRITICAL: LLM_PROVIDER === 'openai' 
+    ? (process.env.LLM_MODEL_CRITICAL || 'gpt-4o')
+    : (process.env.BEDROCK_MODEL_CRITICAL || 'us.anthropic.claude-3-opus-20240229-v1:0'),
   
   // Standard tasks (JD enhancement, email generation, screening questions)
-  STANDARD: process.env.LLM_MODEL_STANDARD || process.env.BEDROCK_MODEL_STANDARD || (LLM_PROVIDER === 'openai' 
-    ? 'gpt-4o' 
-    : 'us.anthropic.claude-3-5-sonnet-20241022-v1:0'),
+  STANDARD: LLM_PROVIDER === 'openai' 
+    ? (process.env.LLM_MODEL_STANDARD || 'gpt-4o')
+    : (process.env.BEDROCK_MODEL_STANDARD || 'us.anthropic.claude-3-5-sonnet-20241022-v1:0'),
   
   // Simple/fast tasks (compensation analysis, github scoring)
-  FAST: process.env.LLM_MODEL_FAST || process.env.BEDROCK_MODEL_FAST || (LLM_PROVIDER === 'openai' 
-    ? 'gpt-4o-mini' 
-    : 'us.anthropic.claude-3-5-haiku-20241022-v1:0'),
+  FAST: LLM_PROVIDER === 'openai' 
+    ? (process.env.LLM_MODEL_FAST || 'gpt-4o-mini')
+    : (process.env.BEDROCK_MODEL_FAST || 'us.anthropic.claude-3-5-haiku-20241022-v1:0'),
   
   // Default fallback
-  DEFAULT: process.env.LLM_MODEL_ID || process.env.BEDROCK_MODEL_ID || (LLM_PROVIDER === 'openai' 
-    ? 'gpt-4o' 
-    : 'us.anthropic.claude-3-5-sonnet-20241022-v1:0'),
+  DEFAULT: LLM_PROVIDER === 'openai' 
+    ? (process.env.LLM_MODEL_ID || 'gpt-4o')
+    : (process.env.BEDROCK_MODEL_ID || 'us.anthropic.claude-3-5-sonnet-20241022-v1:0'),
 };
 
 /**
@@ -46,21 +47,28 @@ const MODEL_CONFIG = {
 function buildJDEnhancerPrompt(payload) {
   const { raw_jd, company_name, role, seniority, budget_info, must_have_skills, nice_to_have } = payload;
 
-  return `You are an expert HR consultant helping to enhance a job description.
+  return `You are an expert HR consultant helping to enhance a job description for Paytm, an Indian fintech company.
 
-Company: ${company_name}
+Company: ${company_name} (Indian fintech company, based in Noida)
 Role: ${role}
 Seniority: ${seniority || 'Not specified'}
-Budget: ${budget_info || 'Not specified'}
+Budget: ${budget_info || 'Not specified'} (in INR - Indian Rupees)
 Must-have skills: ${must_have_skills?.join(', ') || 'None specified'}
 Nice-to-have skills: ${nice_to_have?.join(', ') || 'None specified'}
 
 Raw Job Description:
 ${raw_jd}
 
-Please enhance this job description and return a JSON object with the following structure:
+Please enhance this job description with Indian context:
+- Mention Paytm's position in the Indian fintech market
+- Reference Indian payment systems, UPI, digital payments if relevant
+- Use Indian English conventions
+- Include location context (Noida/Delhi NCR) if appropriate
+- Ensure compensation is in INR format
+
+Return a JSON object with the following structure:
 {
-  "enhanced_jd": "Enhanced, professional job description (2-3 paragraphs)",
+  "enhanced_jd": "Enhanced, professional job description (2-3 paragraphs) with Indian context",
   "apply_form_fields": [
     {"name": "email", "type": "email", "label": "Email Address", "required": true},
     {"name": "phone", "type": "tel", "label": "Phone Number", "required": false}
@@ -77,17 +85,23 @@ Return ONLY valid JSON, no additional text.`;
 function buildResumeScoringPrompt(payload) {
   const { resumeText, job } = payload;
 
-  return `You are an expert recruiter evaluating a candidate's resume against a job posting.
+  return `You are an expert recruiter evaluating a candidate's resume against a job posting at Paytm (Indian fintech company).
 
 Job Requirements:
 - Role: ${job.role}
-- Company: ${job.company_name}
+- Company: ${job.company_name} (Indian fintech, Noida-based)
 - Must-have skills: ${job.must_have_skills?.join(', ') || 'None specified'}
 - Nice-to-have skills: ${job.nice_to_have?.join(', ') || 'None specified'}
 - Job Description: ${job.enhanced_jd || job.raw_jd}
 
 Candidate Resume:
 ${resumeText}
+
+Evaluate the resume considering:
+- Indian market experience and fintech/payment industry knowledge
+- Experience with Indian payment systems (UPI, digital wallets, payment gateways)
+- Understanding of Indian fintech regulations and compliance
+- Cultural fit for Indian work environment
 
 Analyze the resume and return a JSON object with:
 {
@@ -108,10 +122,11 @@ Be thorough and accurate. Return ONLY valid JSON, no additional text.`;
 function buildGitHubPortfolioScoringPrompt(payload) {
   const { githubUrl, portfolioUrl, job } = payload;
 
-  return `Evaluate a candidate's GitHub and/or Portfolio profile for a job position.
+  return `Evaluate a candidate's GitHub and/or Portfolio profile for a job position at Paytm (Indian fintech company).
 
 Job Requirements:
 - Role: ${job.role}
+- Company: Paytm (Indian fintech, Noida)
 - Required skills: ${job.must_have_skills?.join(', ') || 'None specified'}
 
 Candidate Profiles:
@@ -120,11 +135,17 @@ ${portfolioUrl ? `Portfolio: ${portfolioUrl}` : 'No Portfolio provided'}
 
 Note: You cannot actually access these URLs, but based on typical evaluation criteria, provide a score.
 
+Evaluation Context:
+- Consider relevance to Indian fintech market
+- Look for projects related to payment systems, UPI, digital wallets
+- Consider Indian market experience and understanding
+- Evaluate technical depth appropriate for Indian fintech industry
+
 Return a JSON object:
 {
   "score": 0-100,
   "confidence": 0-1,
-  "analysis": "Brief analysis of the profile quality and relevance"
+  "analysis": "Brief analysis of the profile quality and relevance to Paytm and Indian fintech market"
 }
 
 Return ONLY valid JSON, no additional text.`;
@@ -136,18 +157,29 @@ Return ONLY valid JSON, no additional text.`;
 function buildCompensationAnalysisPrompt(payload) {
   const { compensationExpectation, budget_info } = payload;
 
-  return `Analyze if a candidate's compensation expectation aligns with the job budget.
+  return `Analyze if a candidate's compensation expectation aligns with the job budget for Paytm (Indian fintech company).
 
-Job Budget: ${budget_info || 'Not specified'}
-Candidate Expectation: ${compensationExpectation || 'Not specified'}
+IMPORTANT: All amounts are in INR (Indian Rupees). Use Indian compensation format:
+- Format: ₹XX,XX,XXX per annum or XX LPA (Lakhs Per Annum)
+- Example: ₹25,00,000 per annum = 25 LPA
+- Consider Indian market rates for the role and experience level
+
+Job Budget: ${budget_info || 'Not specified'} (in INR)
+Candidate Expectation: ${compensationExpectation || 'Not specified'} (in INR)
+
+Evaluate based on:
+- Indian market compensation standards
+- Fintech industry rates in India
+- Experience level and location (Noida/Delhi NCR)
+- Paytm's compensation structure
 
 Return a JSON object:
 {
   "score": 0-100,
-  "analysis": "Analysis of alignment between expectation and budget"
+  "analysis": "Analysis of alignment between expectation and budget, considering Indian market rates and fintech industry standards"
 }
 
-Score should be higher if expectations align well. Return ONLY valid JSON, no additional text.`;
+Score should be higher if expectations align well with Indian market standards. Return ONLY valid JSON, no additional text.`;
 }
 
 /**
@@ -167,11 +199,18 @@ function buildEmailGeneratorPrompt(payload) {
     jobDetails,
   } = payload;
 
-  let context = `Generate a personalized, professional email inviting a candidate to a video screening.
+  let context = `Generate a personalized, professional email inviting a candidate to a video screening for Paytm (Indian fintech company).
+
+IMPORTANT CONTEXT:
+- Company: Paytm (leading Indian fintech company, based in Noida)
+- Use Indian English conventions and cultural context
+- Reference Paytm's position in Indian digital payments ecosystem
+- Use warm, professional tone appropriate for Indian corporate culture
+- Mention Paytm's impact on India's digital payment revolution if relevant
 
 Candidate: ${candidateName}
 Role: ${seniority ? seniority + ' ' : ''}${role}
-Company: ${company}
+Company: ${company} (Paytm - Indian fintech)
 Screening Link: ${screening_link}
 
 Screening Questions: ${screening_questions?.length || 0} question(s)
@@ -205,16 +244,23 @@ ${screening_questions?.map((q, i) => `${i + 1}. ${q.text} (${q.time_limit_sec}s)
 `;
   }
 
-  context += `Generate a warm, professional email. Make it personalized based on the candidate's scores and profile.
+  context += `Generate a warm, professional email with Indian context. Make it personalized based on the candidate's scores and profile.
 The tone should be ${scores?.unifiedScore >= 85 ? 'enthusiastic' : scores?.unifiedScore >= 80 ? 'warm' : 'friendly'}.
+
+Email Guidelines:
+- Use Indian English conventions
+- Reference Paytm's role in Indian fintech and digital payments
+- Mention Paytm's impact on India's digital economy
+- Use culturally appropriate greetings and closing
+- Keep it professional yet warm (Indian corporate style)
 
 Return a JSON object:
 {
-  "subject": "Email subject line",
+  "subject": "Email subject line (with Paytm/Indian context)",
   "preview_text": "Preview text (first 100 chars)",
   "tone": "friendly" | "warm" | "enthusiastic",
-  "plain_text": "Full email text (plain text version)",
-  "html_snippet": "HTML version of email body"
+  "plain_text": "Full email text (plain text version) with Indian context",
+  "html_snippet": "HTML version of email body with Indian context"
 }
 
 Return ONLY valid JSON, no additional text.`;
@@ -228,11 +274,11 @@ Return ONLY valid JSON, no additional text.`;
 function buildScreeningQuestionsPrompt(payload) {
   const { job, candidateInfo } = payload;
 
-  return `You are an expert interviewer creating video screening questions for a job position.
+  return `You are an expert interviewer creating video screening questions for a job position at Paytm (Indian fintech company).
 
 Job Details:
 - Role: ${job.role}
-- Company: ${job.company_name}
+- Company: ${job.company_name} (Paytm - Indian fintech, Noida)
 - Seniority: ${job.seniority || 'Not specified'}
 - Must-have skills: ${job.must_have_skills?.join(', ') || 'None specified'}
 - Nice-to-have skills: ${job.nice_to_have?.join(', ') || 'None specified'}
@@ -244,13 +290,16 @@ ${candidateInfo ? `Candidate Context:
 ` : ''}
 
 Generate 3-5 engaging, relevant video screening questions that assess:
-1. Technical skills and experience relevant to the role
+1. Technical skills and experience relevant to the role (especially fintech/payment systems)
 2. Problem-solving approach and critical thinking
 3. Communication abilities
-4. Cultural fit and motivation
-5. Real-world application of skills
+4. Cultural fit for Indian fintech environment and motivation
+5. Real-world application of skills in Indian market context
 
-Each question should:
+Question Guidelines:
+- Include questions about Indian fintech/payment systems (UPI, digital payments, payment gateways) if relevant
+- Consider Indian market experience and understanding
+- Use Indian English conventions
 - Be clear and specific
 - Allow candidates to showcase their expertise
 - Have an appropriate time limit (60-180 seconds)
@@ -259,7 +308,7 @@ Each question should:
 Return a JSON object with this structure:
 {
   "screening_questions": [
-    {"text": "Question 1 text", "time_limit_sec": 120, "type": "video"},
+    {"text": "Question 1 text (with Indian/fintech context if relevant)", "time_limit_sec": 120, "type": "video"},
     {"text": "Question 2 text", "time_limit_sec": 90, "type": "video"},
     {"text": "Question 3 text", "time_limit_sec": 150, "type": "video"}
   ]
@@ -274,7 +323,12 @@ Return ONLY valid JSON, no additional text.`;
 function buildVideoScoringPrompt(payload) {
   const { transcript, screening_questions } = payload;
 
-  return `You are an expert interviewer evaluating a candidate's video interview responses.
+  return `You are an expert interviewer evaluating a candidate's video interview responses for Paytm (Indian fintech company).
+
+Context:
+- Company: Paytm (Indian fintech, Noida-based)
+- Consider Indian market context, fintech industry knowledge, and cultural fit
+- Evaluate understanding of Indian payment systems and digital finance
 
 Screening Questions:
 ${screening_questions?.map((q, i) => `${i + 1}. ${q.text}`).join('\n') || 'No questions provided'}
@@ -282,7 +336,13 @@ ${screening_questions?.map((q, i) => `${i + 1}. ${q.text}`).join('\n') || 'No qu
 Candidate Transcript:
 ${transcript}
 
-Evaluate each question response and provide an overall assessment. Return a JSON object:
+Evaluate each question response considering:
+- Technical depth and relevance to Indian fintech market
+- Understanding of Indian payment systems (UPI, digital wallets, etc.)
+- Communication skills appropriate for Indian corporate environment
+- Cultural fit for Indian work culture
+
+Provide an overall assessment. Return a JSON object:
 {
   "per_question": [
     {
@@ -491,15 +551,15 @@ function getModelForTask(promptName) {
 }
 
 /**
- * Main LLM function - routes to appropriate prompt builder and calls Bedrock
+ * Main LLM function - routes to appropriate prompt builder and calls the configured LLM provider (Bedrock or OpenAI)
  * Automatically selects the best model for each task type
  */
 export async function callLLM(promptName, payload) {
   const selectedModel = getModelForTask(promptName);
-  console.log(`[LLM] Calling ${promptName} with Bedrock model: ${selectedModel}`);
+  console.log(`[LLM] Calling ${promptName} with ${LLM_PROVIDER.toUpperCase()} model: ${selectedModel}`);
 
   let prompt;
-  let systemPrompt = 'You are a helpful AI assistant. Always return valid JSON as requested. Do not include any text before or after the JSON.';
+  let systemPrompt = 'You are a helpful AI assistant specialized in Indian HR and recruitment. Always return valid JSON as requested. Do not include any text before or after the JSON.\n\nIMPORTANT CONTEXT:\n- Company: Paytm (Indian fintech company)\n- Location: India (primarily Noida, Delhi NCR)\n- Currency: Always use INR (₹) - Indian Rupees\n- Compensation format: Use Indian format (e.g., ₹25,00,000 per annum or 25 LPA)\n- Names: Use Indian names (e.g., Rahul Sharma, Priya Patel, Amit Kumar)\n- Phone format: +91-XXXXXXXXXX\n- Cultural context: Indian work culture, fintech industry, payment systems\n- Language: Use Indian English conventions';
   let temperature = 0.7; // Default temperature
 
   switch (promptName) {

@@ -1,0 +1,643 @@
+{
+	"info": {
+		"_postman_id": "hirewise-api-collection",
+		"name": "HireWise API - Paytm",
+		"description": "Complete API collection for HireWise Backend - HR Job Posting and Candidate Screening Pipeline\n\nCompany: Paytm\nCurrency: INR (Indian Rupees)\nAll examples use Indian compensation ranges and Paytm-specific job descriptions.",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "Health Check",
+			"item": [
+				{
+					"name": "Health Check",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "http://localhost:3000/health",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "3000",
+							"path": [
+								"health"
+							]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Jobs",
+			"item": [
+				{
+					"name": "Create Job",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"raw_jd\": \"We are looking for a Senior Full Stack Developer to join Paytm. The ideal candidate should have experience with React, Node.js, and MongoDB. You will be responsible for building scalable fintech applications and working with a team of talented engineers in our Noida office.\",\n  \"company_name\": \"Paytm\",\n  \"role\": \"Senior Full Stack Developer\",\n  \"seniority\": \"Senior\",\n  \"budget_info\": \"₹25,00,000 - ₹35,00,000 per annum\",\n  \"must_have_skills\": [\"React\", \"Node.js\", \"MongoDB\", \"JavaScript\", \"Payment Gateway Integration\"],\n  \"nice_to_have\": [\"TypeScript\", \"AWS\", \"Docker\", \"Kubernetes\", \"Fintech Experience\"]\n}"
+						},
+						"url": {
+							"raw": "http://localhost:3000/api/jobs",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "3000",
+							"path": [
+								"api",
+								"jobs"
+							]
+						}
+					}
+				},
+				{
+					"name": "Get Job by ID",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "http://localhost:3000/api/jobs/:jobId",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "3000",
+							"path": [
+								"api",
+								"jobs",
+								":jobId"
+							],
+							"variable": [
+								{
+									"key": "jobId",
+									"value": "YOUR_JOB_ID_HERE"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Update Job Settings",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"autoInviteOnLevel1Approval\": true,\n  \"autoInviteThreshold\": 70,\n  \"autoCreateScreeningThreshold\": 75\n}"
+						},
+						"url": {
+							"raw": "http://localhost:3000/api/jobs/:jobId/settings",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "3000",
+							"path": [
+								"api",
+								"jobs",
+								":jobId",
+								"settings"
+							],
+							"variable": [
+								{
+									"key": "jobId",
+									"value": "YOUR_JOB_ID_HERE"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Match Candidates to Job",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"url": {
+							"raw": "http://localhost:3000/api/jobs/:jobId/match-candidates",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "3000",
+							"path": [
+								"api",
+								"jobs",
+								":jobId",
+								"match-candidates"
+							],
+							"variable": [
+								{
+									"key": "jobId",
+									"value": "YOUR_JOB_ID_HERE"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Get Job Matches",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "http://localhost:3000/api/jobs/:jobId/matches?minScore=50&limit=20&status=pending",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "3000",
+							"path": [
+								"api",
+								"jobs",
+								":jobId",
+								"matches"
+							],
+							"query": [
+								{
+									"key": "minScore",
+									"value": "50"
+								},
+								{
+									"key": "limit",
+									"value": "20"
+								},
+								{
+									"key": "status",
+									"value": "pending"
+								}
+							],
+							"variable": [
+								{
+									"key": "jobId",
+									"value": "YOUR_JOB_ID_HERE"
+								}
+							]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Applications",
+			"item": [
+				{
+					"name": "Apply to Job (with Resume)",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "resume",
+									"type": "file",
+									"src": []
+								},
+								{
+									"key": "applicant_email",
+									"value": "rahul.sharma@example.com",
+									"type": "text"
+								},
+								{
+									"key": "applicant_name",
+									"value": "Rahul Sharma",
+									"type": "text"
+								},
+								{
+									"key": "applicant_phone",
+									"value": "+91-9876543210",
+									"type": "text"
+								},
+								{
+									"key": "githubUrl",
+									"value": "https://github.com/rahulsharma",
+									"type": "text"
+								},
+								{
+									"key": "portfolioUrl",
+									"value": "https://rahulsharma.dev",
+									"type": "text"
+								},
+								{
+									"key": "compensationExpectation",
+									"value": "₹30,00,000 per annum",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "http://localhost:3000/api/apply/:jobId",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "3000",
+							"path": [
+								"api",
+								"apply",
+								":jobId"
+							],
+							"variable": [
+								{
+									"key": "jobId",
+									"value": "YOUR_JOB_ID_HERE"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Give Consent for Video Screening",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"consent\": true\n}"
+						},
+						"url": {
+							"raw": "http://localhost:3000/api/applications/:applicationId/consent",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "3000",
+							"path": [
+								"api",
+								"applications",
+								":applicationId",
+								"consent"
+							],
+							"variable": [
+								{
+									"key": "applicationId",
+									"value": "YOUR_APPLICATION_ID_HERE"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Approve Application (Level 1)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": ""
+						},
+						"url": {
+							"raw": "http://localhost:3000/api/applications/:applicationId/approve-level1",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "3000",
+							"path": [
+								"api",
+								"applications",
+								":applicationId",
+								"approve-level1"
+							],
+							"variable": [
+								{
+									"key": "applicationId",
+									"value": "YOUR_APPLICATION_ID_HERE"
+								}
+							]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Screenings",
+			"item": [
+				{
+					"name": "Get Screening Questions",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "http://localhost:3000/api/screenings/:screeningId/questions",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "3000",
+							"path": [
+								"api",
+								"screenings",
+								":screeningId",
+								"questions"
+							],
+							"variable": [
+								{
+									"key": "screeningId",
+									"value": "YOUR_SCREENING_ID_HERE"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Upload Video URL",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"videoUrl\": \"https://example.com/videos/screening-video.mp4\",\n  \"questions\": [\n    {\n      \"text\": \"Tell us about your experience with React and payment gateway integrations\",\n      \"time_limit_sec\": 120,\n      \"type\": \"video\"\n    },\n    {\n      \"text\": \"How do you handle state management in large fintech applications?\",\n      \"time_limit_sec\": 90,\n      \"type\": \"video\"\n    },\n    {\n      \"text\": \"Describe your experience working with financial APIs and secure transactions\",\n      \"time_limit_sec\": 150,\n      \"type\": \"video\"\n    }\n  ]\n}"
+						},
+						"url": {
+							"raw": "http://localhost:3000/api/screenings/:screeningId/upload-video",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "3000",
+							"path": [
+								"api",
+								"screenings",
+								":screeningId",
+								"upload-video"
+							],
+							"variable": [
+								{
+									"key": "screeningId",
+									"value": "YOUR_SCREENING_ID_HERE"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Process Video (STT + Scoring)",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"url": {
+							"raw": "http://localhost:3000/api/screenings/:screeningId/process",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "3000",
+							"path": [
+								"api",
+								"screenings",
+								":screeningId",
+								"process"
+							],
+							"variable": [
+								{
+									"key": "screeningId",
+									"value": "YOUR_SCREENING_ID_HERE"
+								}
+							]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Users",
+			"item": [
+				{
+					"name": "Get User by ID",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "http://localhost:3000/api/users/:userId",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "3000",
+							"path": [
+								"api",
+								"users",
+								":userId"
+							],
+							"variable": [
+								{
+									"key": "userId",
+									"value": "YOUR_USER_ID_HERE"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Update User",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"Rahul Sharma\",\n  \"phone\": \"+91-9876543210\",\n  \"githubUrl\": \"https://github.com/rahulsharma\",\n  \"portfolioUrl\": \"https://rahulsharma.dev\",\n  \"compensationExpectation\": \"₹32,00,000 per annum\",\n  \"isHired\": false\n}"
+						},
+						"url": {
+							"raw": "http://localhost:3000/api/users/:userId",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "3000",
+							"path": [
+								"api",
+								"users",
+								":userId"
+							],
+							"variable": [
+								{
+									"key": "userId",
+									"value": "YOUR_USER_ID_HERE"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Mark User as Hired",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"isHired\": true\n}"
+						},
+						"url": {
+							"raw": "http://localhost:3000/api/users/:userId",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "3000",
+							"path": [
+								"api",
+								"users",
+								":userId"
+							],
+							"variable": [
+								{
+									"key": "userId",
+									"value": "YOUR_USER_ID_HERE"
+								}
+							]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Debug",
+			"item": [
+				{
+					"name": "Get All Jobs",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "http://localhost:3000/debug/jobs",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "3000",
+							"path": [
+								"debug",
+								"jobs"
+							]
+						}
+					}
+				},
+				{
+					"name": "Get All Applications",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "http://localhost:3000/debug/applications",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "3000",
+							"path": [
+								"debug",
+								"applications"
+							]
+						}
+					}
+				},
+				{
+					"name": "Get All Screenings",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "http://localhost:3000/debug/screenings",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "3000",
+							"path": [
+								"debug",
+								"screenings"
+							]
+						}
+					}
+				},
+				{
+					"name": "Get All Users",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "http://localhost:3000/debug/users",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "3000",
+							"path": [
+								"debug",
+								"users"
+							]
+						}
+					}
+				},
+				{
+					"name": "Get All Matches",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "http://localhost:3000/debug/matches",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "3000",
+							"path": [
+								"debug",
+								"matches"
+							]
+						}
+					}
+				}
+			]
+		}
+	],
+	"variable": [
+		{
+			"key": "baseUrl",
+			"value": "http://localhost:3000",
+			"type": "string"
+		}
+	]
+}
+
