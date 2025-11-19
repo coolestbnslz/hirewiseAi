@@ -1,0 +1,329 @@
+import express from 'express';
+import Job from '../models/Job.js';
+import Application from '../models/Application.js';
+import User from '../models/User.js';
+import Screening from '../models/Screening.js';
+import JobCandidateMatch from '../models/JobCandidateMatch.js';
+import { callLLM } from '../lib/llm.js';
+import { parseJsonSafely } from '../lib/parseJsonSafely.js';
+import { extractTagsFromResume } from '../lib/embeddings.js';
+import { saveUploadedFile, readFileAsText } from '../lib/storage.js';
+import { sendEmail } from '../lib/email.js';
+import { upload } from '../middleware/upload.js';
+import { v4 as uuidv4 } from 'uuid';
+
+const router = express.Router();
+
+// Calculate unified score from individual scores
+function calculateUnifiedScore(scores) {
+  const weights = {
+    resumeScore: 0.5,
+    githubPortfolioScore: 0.3,
+    compensationScore: 0.2,
+  };
+
+  const resumeScore = scores.resumeScore || 0;
+  const githubPortfolioScore = scores.githubPortfolioScore || 0;
+  const compensationScore = scores.compensationScore || 0;
+
+  const unified = (
+    resumeScore * weights.resumeScore +
+    githubPortfolioScore * weights.githubPortfolioScore +
+    compensationScore * weights.compensationScore
+  );
+
+  return Math.round(unified);
+}
+
+// POST /api/apply/:jobId - Apply to job with resume upload
+router.post('/:jobId', upload.single('resume'), async (req, res) => {
+  try {
+    const { jobId } = req.params;
+    const { applicant_email, applicant_name, applicant_phone, githubUrl, portfolioUrl, compensationExpectation } = req.body;
+
+    if (!req.file) {
+      return res.status(400).json({ error: 'Resume file is required' });
+    }
+
+    if (!applicant_email) {
+      return res.status(400).json({ error: 'applicant_email is required' });
+    }
+
+    // Find job
+    const job = await Job.findById(jobId);
+    if (!job) {
+      return res.status(404).json({ error: 'Job not found' });
+    }
+
+    // Save resume file
+    const resumePath = await saveUploadedFile(req.file);
+    const resumeText = await readFileAsText(resumePath);
+
+    // Find or create user
+    let user = await User.findOne({ email: applicant_email.toLowerCase() });
+    
+    // Extract tags from resume using embeddings
+    let resumeTags = [];
+    if (resumeText) {
+      try {
+        resumeTags = await extractTagsFromResume(resumeText);
+        console.log(`[Application] Extracted ${resumeTags.length} tags from resume using embeddings`);
+      } catch (error) {
+        console.error('[Application] Error extracting tags from resume:', error);
+        // Continue without tags if extraction fails
+      }
+    }
+    
+    if (!user) {
+      user = new User({
+        email: applicant_email.toLowerCase(),
+        name: applicant_name || 'Unknown',
+        phone: applicant_phone,
+        resumePath,
+        resumeText,
+        githubUrl,
+        portfolioUrl,
+        compensationExpectation,
+        tags: resumeTags, // Extracted using embeddings
+      });
+    } else {
+      // Update user info
+      if (resumePath) user.resumePath = resumePath;
+      if (resumeText) {
+        user.resumeText = resumeText;
+        user.tags = resumeTags; // Update tags with embeddings-based extraction
+      }
+      if (githubUrl) user.githubUrl = githubUrl;
+      if (portfolioUrl) user.portfolioUrl = portfolioUrl;
+      if (compensationExpectation) user.compensationExpectation = compensationExpectation;
+    }
+    await user.save();
+
+    // Score resume
+    const resumeLLMResponse = await callLLM('RESUME_SCORING', {
+      resumeText,
+      job,
+    });
+    const resumeParsed = parseJsonSafely(resumeLLMResponse);
+    const resumeScore = resumeParsed.ok ? resumeParsed.json.match_score : 0;
+
+    // Score GitHub/Portfolio
+    let githubPortfolioScore = 0;
+    if (user.githubUrl || user.portfolioUrl) {
+      const githubLLMResponse = await callLLM('GITHUB_PORTFOLIO_SCORING', {
+        githubUrl: user.githubUrl,
+        portfolioUrl: user.portfolioUrl,
+        job,
+      });
+      const githubParsed = parseJsonSafely(githubLLMResponse);
+      githubPortfolioScore = githubParsed.ok ? githubParsed.json.score : 0;
+    }
+
+    // Score compensation
+    let compensationScore = 0;
+    let compensationAnalysis = '';
+    if (user.compensationExpectation && job.budget_info) {
+      const compLLMResponse = await callLLM('COMPENSATION_ANALYSIS', {
+        compensationExpectation: user.compensationExpectation,
+        budget_info: job.budget_info,
+      });
+      const compParsed = parseJsonSafely(compLLMResponse);
+      if (compParsed.ok) {
+        compensationScore = compParsed.json.score || 0;
+        compensationAnalysis = compParsed.json.analysis || '';
+      }
+    }
+
+    // Calculate unified score
+    const scores = {
+      resumeScore,
+      githubPortfolioScore,
+      compensationScore,
+      compensationAnalysis,
+    };
+    const unifiedScore = calculateUnifiedScore(scores);
+
+    // Check if there's an existing match for this job-candidate pair
+    const existingMatch = await JobCandidateMatch.findOne({
+      jobId: job._id,
+      userId: user._id,
+    });
+
+    // Create application
+    const application = new Application({
+      jobId: job._id,
+      userId: user._id,
+      resumePath,
+      resumeText,
+      scores,
+      unifiedScore,
+      rawResumeLLM: resumeLLMResponse,
+      consent_given: false,
+      level1_approved: false,
+      matchId: existingMatch?._id || null,
+    });
+    await application.save();
+
+    // Update match status to 'applied' and link to application
+    if (existingMatch) {
+      existingMatch.status = 'applied';
+      existingMatch.applicationId = application._id;
+      await existingMatch.save();
+    }
+
+    // Auto-create screening if threshold met
+    let screening = null;
+    if (unifiedScore >= job.settings.autoCreateScreeningThreshold) {
+      screening = new Screening({
+        applicationId: application._id,
+        jobId: job._id,
+        screening_link: `https://hirewise.app/screening/${uuidv4()}`,
+      });
+      await screening.save();
+    }
+
+    res.status(201).json({
+      applicationId: application._id,
+      unifiedScore,
+      scores,
+      screeningId: screening?._id || null,
+    });
+  } catch (error) {
+    console.error('Error processing application:', error);
+    res.status(500).json({ error: 'Internal server error', details: error.message });
+  }
+});
+
+// POST /api/applications/:id/consent - Mark consent given
+router.post('/:id/consent', async (req, res) => {
+  try {
+    const application = await Application.findById(req.params.id);
+    
+    if (!application) {
+      return res.status(404).json({ error: 'Application not found' });
+    }
+
+    application.consent_given = true;
+    await application.save();
+
+    res.json({ message: 'Consent recorded', application });
+  } catch (error) {
+    console.error('Error updating consent:', error);
+    res.status(500).json({ error: 'Internal server error', details: error.message });
+  }
+});
+
+// POST /api/applications/:id/approve-level1 - Approve application and auto-send email if enabled
+router.post('/:id/approve-level1', async (req, res) => {
+  try {
+    const application = await Application.findById(req.params.id).populate('jobId').populate('userId');
+    
+    if (!application) {
+      return res.status(404).json({ error: 'Application not found' });
+    }
+
+    if (!application.consent_given) {
+      return res.status(400).json({ error: 'Consent not given. Cannot approve without consent.' });
+    }
+
+    application.level1_approved = true;
+    await application.save();
+
+    const job = application.jobId;
+    const user = application.userId;
+
+    // Auto-send email if enabled
+    if (job.settings.autoInviteOnLevel1Approval && 
+        application.unifiedScore >= job.settings.autoInviteThreshold) {
+      
+      // Find or create screening
+      let screening = await Screening.findOne({ applicationId: application._id });
+      if (!screening) {
+        screening = new Screening({
+          applicationId: application._id,
+          jobId: job._id,
+          screening_link: `https://hirewise.app/screening/${uuidv4()}`,
+        });
+        await screening.save();
+      }
+
+      // Generate dynamic email based on candidate profile and scores
+      const emailLLMResponse = await callLLM('EMAIL_GENERATOR', {
+        candidateName: user.name,
+        candidateEmail: user.email,
+        role: job.role,
+        company: job.company_name,
+        seniority: job.seniority,
+        screening_link: screening.screening_link,
+        screening_questions: [], // Questions will be generated on-the-spot when candidate accesses screening
+        // Candidate scores and highlights
+        scores: {
+          resumeScore: application.scores.resumeScore,
+          githubPortfolioScore: application.scores.githubPortfolioScore,
+          compensationScore: application.scores.compensationScore,
+          unifiedScore: application.unifiedScore,
+        },
+        // Resume highlights from LLM analysis
+        resumeHighlights: application.rawResumeLLM ? (() => {
+          try {
+            const parsed = JSON.parse(application.rawResumeLLM);
+            return {
+              skills_matched: parsed.skills_matched || [],
+              top_reasons: parsed.top_reasons || [],
+              recommended_action: parsed.recommended_action,
+            };
+          } catch {
+            return null;
+          }
+        })() : null,
+        // User profile info
+        userProfile: {
+          githubUrl: user.githubUrl,
+          portfolioUrl: user.portfolioUrl,
+          compensationExpectation: user.compensationExpectation,
+        },
+        // Job details for personalization
+        jobDetails: {
+          must_have_skills: job.must_have_skills,
+          nice_to_have: job.nice_to_have,
+          tags: job.tags,
+        },
+      });
+
+      const emailParsed = parseJsonSafely(emailLLMResponse);
+      
+      if (emailParsed.ok) {
+        const emailData = emailParsed.json;
+        
+        // Send email
+        const emailResult = await sendEmail({
+          to: user.email,
+          subject: emailData.subject,
+          html: emailData.html_snippet,
+          text: emailData.plain_text,
+        });
+
+        if (!emailResult.ok) {
+          console.error('[Application] Failed to send email:', emailResult.error);
+          // Continue even if email fails - don't block the approval
+        }
+
+        screening.invite_sent_at = new Date();
+        await screening.save();
+      }
+    }
+
+    res.json({ 
+      message: 'Application approved',
+      application,
+      emailSent: job.settings.autoInviteOnLevel1Approval && 
+                 application.unifiedScore >= job.settings.autoInviteThreshold,
+    });
+  } catch (error) {
+    console.error('Error approving application:', error);
+    res.status(500).json({ error: 'Internal server error', details: error.message });
+  }
+});
+
+export default router;
+
