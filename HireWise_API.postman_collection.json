@@ -528,6 +528,185 @@
 							]
 						}
 					}
+				},
+				{
+					"name": "Search Candidates (Natural Language)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"Find React developers with Node.js experience\",\n  \"limit\": 50,\n  \"skip\": 0\n}"
+						},
+						"url": {
+							"raw": "http://localhost:3000/api/users/search",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "3000",
+							"path": [
+								"api",
+								"users",
+								"search"
+							]
+						}
+					}
+				},
+				{
+					"name": "Search - Senior Python Developers",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"Senior Python developers with 5+ years experience in Bangalore\",\n  \"limit\": 20,\n  \"skip\": 0\n}"
+						},
+						"url": {
+							"raw": "http://localhost:3000/api/users/search",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "3000",
+							"path": [
+								"api",
+								"users",
+								"search"
+							]
+						}
+					}
+				},
+				{
+					"name": "Search - Full Stack with GitHub",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"Full stack developers who know React, Node.js and MongoDB with GitHub profiles\",\n  \"limit\": 30\n}"
+						},
+						"url": {
+							"raw": "http://localhost:3000/api/users/search",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "3000",
+							"path": [
+								"api",
+								"users",
+								"search"
+							]
+						}
+					}
+				},
+				{
+					"name": "Search - Unhired Candidates",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"Unhired candidates with AWS and Docker experience\",\n  \"limit\": 50\n}"
+						},
+						"url": {
+							"raw": "http://localhost:3000/api/users/search",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "3000",
+							"path": [
+								"api",
+								"users",
+								"search"
+							]
+						}
+					}
+				},
+				{
+					"name": "Search - By Name",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"Find Rahul Sharma\"\n}"
+						},
+						"url": {
+							"raw": "http://localhost:3000/api/users/search",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "3000",
+							"path": [
+								"api",
+								"users",
+								"search"
+							]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Analysis",
+			"item": [
+				{
+					"name": "Check Criteria in Text",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"text\": \"Looking for a Senior Software Engineer with 5+ years of experience in React and Node.js, based in Bangalore. Must have worked in fintech or e-commerce industry.\"\n}"
+						},
+						"url": {
+							"raw": "http://localhost:3000/api/analysis/check-criteria",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "3000",
+							"path": [
+								"api",
+								"analysis",
+								"check-criteria"
+							]
+						}
+					}
 				}
 			]
 		},

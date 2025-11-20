@@ -550,6 +550,108 @@ Return ONLY valid JSON array, no additional text.`;
 }
 
 /**
+ * Build prompt for extracting candidate search criteria from natural language
+ */
+function buildCandidateSearchPrompt(payload) {
+  const { searchQuery } = payload;
+
+  return `You are an expert recruiter helping to search for candidates in a candidate database.
+
+The candidate database has the following fields in MongoDB:
+- name: string (candidate's full name)
+- email: string (candidate's email address)
+- phone: string (candidate's phone number)
+- tags: array of strings (skills, technologies, frameworks, tools, languages - e.g., ["React", "Node.js", "Python", "AWS"])
+- resumeText: string (full text content of the candidate's resume)
+- githubUrl: string (candidate's GitHub profile URL)
+- portfolioUrl: string (candidate's portfolio website URL)
+- linkedinUrl: string (candidate's LinkedIn profile URL)
+- compensationExpectation: string (candidate's expected compensation in INR)
+- isHired: boolean (whether the candidate has been hired)
+- createdAt: date (when the candidate was added to the system)
+- updatedAt: date (when the candidate was last updated)
+
+User's search query:
+"${searchQuery}"
+
+Your task is to extract structured search criteria from the user's natural language query and create MongoDB query operators.
+
+IMPORTANT RULES:
+1. For skills/technologies, use the "tags" field with $in operator (match ANY of the tags)
+2. For text search in resume content, use "resumeText" field with $regex operator (case-insensitive)
+3. For name search, use "name" field with $regex operator (case-insensitive)
+4. For email search, use "email" field with $regex operator (case-insensitive)
+5. For experience-related queries, search in "resumeText" using $regex
+6. For location-based queries, search in "resumeText" using $regex
+7. For compensation, use "compensationExpectation" field with $regex
+8. For hired status, use "isHired" field with boolean value
+9. For date ranges, use "createdAt" or "updatedAt" with $gte or $lte operators
+
+MongoDB Query Operators you can use:
+- $in: for array fields like tags
+- $regex: for text search (use with $options: 'i' for case-insensitive)
+- $gte, $lte, $gt, $lt: for date and number comparisons
+- $and, $or: for combining multiple conditions
+- $eq: for exact matches
+
+Examples of what you should extract:
+
+Query: "Find React developers with Node.js experience"
+→ Extract: tags: ["React", "Node.js"]
+
+Query: "Senior software engineers in Bangalore"
+→ Extract: resumeText search for "senior" AND "bangalore", tags: ["Software Engineer"]
+
+Query: "Python developers with 5+ years experience"
+→ Extract: tags: ["Python"], resumeText search for "5 years" or "5+ years"
+
+Query: "Full stack developers who know React and MongoDB"
+→ Extract: tags: ["React", "MongoDB", "Full Stack"]
+
+Query: "Candidates with GitHub profiles"
+→ Extract: githubUrl exists (not null/empty)
+
+Query: "Find candidates added in the last 30 days"
+→ Extract: createdAt >= (current date - 30 days)
+
+Query: "Unhired candidates with React experience"
+→ Extract: isHired: false, tags: ["React"]
+
+Query: "Find John Doe"
+→ Extract: name search for "John Doe"
+
+Return a JSON object with this structure:
+{
+  "searchCriteria": {
+    "tags": ["tag1", "tag2", ...],  // Technologies/skills to search in tags array (optional)
+    "resumeKeywords": ["keyword1", "keyword2", ...],  // Keywords to search in resume text (optional)
+    "nameQuery": "search term",  // Name to search (optional)
+    "emailQuery": "search term",  // Email to search (optional)
+    "compensationQuery": "search term",  // Compensation keywords (optional)
+    "isHired": true/false,  // Hired status filter (optional)
+    "githubRequired": true/false,  // Whether GitHub URL is required (optional)
+    "portfolioRequired": true/false,  // Whether portfolio URL is required (optional)
+    "linkedinRequired": true/false,  // Whether LinkedIn URL is required (optional)
+    "dateFilter": {  // Date range filter (optional)
+      "field": "createdAt" or "updatedAt",
+      "operator": "$gte" or "$lte" or "$gt" or "$lt",
+      "value": "ISO date string"
+    }
+  },
+  "explanation": "Brief explanation of what you're searching for based on the query"
+}
+
+IMPORTANT:
+- Only include fields that are relevant to the search query
+- Extract as many relevant search criteria as possible
+- Be smart about synonyms: "developer" = "engineer", "programmer", "coder"
+- For skills, extract both explicit and implicit skills mentioned
+- If no clear criteria can be extracted, return empty searchCriteria object
+
+Return ONLY valid JSON, no additional text.`;
+}
+
+/**
  * Build prompt for extracting tags from job description
  */
 function buildTagExtractionPrompt(payload) {
@@ -911,6 +1013,11 @@ export async function callLLM(promptName, payload) {
     case 'CRITERIA_CHECK':
       prompt = buildCriteriaCheckPrompt(payload);
       temperature = 0.3; // Lower temperature for consistent, objective checking
+      break;
+
+    case 'CANDIDATE_SEARCH':
+      prompt = buildCandidateSearchPrompt(payload);
+      temperature = 0.4; // Lower temperature for more precise, consistent extraction
       break;
 
     default:
