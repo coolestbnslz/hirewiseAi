@@ -46,6 +46,54 @@ const MODEL_CONFIG = {
 };
 
 /**
+ * Build prompt for extracting job fields from raw text
+ */
+function buildJobFieldExtractionPrompt(payload) {
+  const { text } = payload;
+
+  return `You are an expert HR consultant extracting structured job information from raw text for Paytm, an Indian fintech company.
+
+Raw Job Description Text:
+${text}
+
+Extract the following fields from the text. If a field is not mentioned, use null or an empty array as appropriate. Use Indian context and conventions.
+
+Return a JSON object with the following structure:
+{
+  "company_name": "Company name (e.g., 'Paytm' if mentioned, otherwise null)",
+  "role": "Job title/role (e.g., 'Senior Full Stack Developer')",
+  "team": "Team or department name (e.g., 'Travel', 'Engineering', 'Product') or null",
+  "seniority": "Seniority level (e.g., 'Junior', 'Mid-level', 'Senior', 'Lead', 'Principal') or null",
+  "location": "Location (e.g., 'Noida', 'Gurugram', 'Bangalore', 'Mumbai') or null",
+  "job_type": "Job type (e.g., 'full-time', 'part-time', 'contract', 'hybrid', 'remote', 'onsite') or null",
+  "budget_info": "Compensation/budget information in INR format with numbers only (e.g., '₹25,00,000 - ₹35,00,000 per annum' for range, or '₹30,00,000 per annum' for single value) or null",
+  "must_have_skills": ["Array of required skills/technologies mentioned in the text"],
+  "nice_to_have": ["Array of preferred but not required skills/technologies"]
+}
+
+Guidelines:
+- Extract company name if mentioned, otherwise use null
+- Extract the exact job title/role from the text
+- Extract team/department if mentioned (e.g., "Travel team", "Engineering department")
+- Determine seniority from keywords like "Senior", "Junior", "Lead", "Principal", "Mid-level"
+- Extract location (prefer Indian cities like Noida, Gurugram, Bangalore, Mumbai, Pune, Hyderabad)
+- Determine job type from keywords like "hybrid", "remote", "onsite", "full-time"
+- Extract budget/compensation in INR format with numbers only (NO "Up to", "Max", "Min" prefixes):
+  * If range is mentioned: "₹X,XX,XXX - ₹Y,YY,YYY per annum" (e.g., "₹25,00,000 - ₹35,00,000 per annum")
+  * If single value or max mentioned: "₹X,XX,XXX per annum" (e.g., "30 LPA" or "max 30 LPA" → "₹30,00,000 per annum")
+  * If LPA mentioned: Convert to INR format (e.g., "30 LPA" → "₹30,00,000 per annum", "max 30 LPA" → "₹30,00,000 per annum")
+  * Always use Indian number format with commas (₹X,XX,XXX)
+  * Include "per annum" at the end
+  * DO NOT include words like "Up to", "Max", "Min", "Maximum", "Minimum" - only numbers and "per annum"
+- Extract must-have skills: technologies, frameworks, tools that are explicitly required
+- Extract nice-to-have skills: technologies, frameworks, tools that are preferred but not mandatory
+- If a field cannot be determined from the text, use null (for strings) or [] (for arrays)
+- Use Indian English conventions and context
+
+Return ONLY valid JSON, no additional text.`;
+}
+
+/**
  * Build prompt for JD enhancement
  */
 function buildJDEnhancerPrompt(payload) {
@@ -1099,6 +1147,11 @@ export async function callLLM(promptName, payload) {
     case 'TAG_EXTRACTION':
       prompt = buildTagExtractionPrompt(payload);
       temperature = 0.5; // Moderate temperature for balanced extraction
+      break;
+
+    case 'JOB_FIELD_EXTRACTION':
+      prompt = buildJobFieldExtractionPrompt(payload);
+      temperature = 0.5; // Moderate temperature for accurate extraction
       break;
 
     case 'RESUME_TAG_EXTRACTION':

@@ -2,8 +2,60 @@ import express from 'express';
 import Job from '../models/Job.js';
 import { enhanceJD } from '../lib/jdEnhancer.js';
 import { matchJobToCandidates, getJobMatches } from '../lib/candidateMatcher.js';
+import { callLLM } from '../lib/llm.js';
+import { parseJsonSafely } from '../lib/parseJsonSafely.js';
 
 const router = express.Router();
+
+// POST /api/jobs/extract-fields - Extract job fields from raw text
+router.post('/extract-fields', async (req, res) => {
+  try {
+    const { text } = req.body;
+
+    if (!text || typeof text !== 'string' || text.trim().length === 0) {
+      return res.status(400).json({ error: 'text field is required and must be a non-empty string' });
+    }
+
+    console.log('[Jobs] Extracting job fields from text...');
+    
+    // Call LLM to extract job fields
+    const llmResponse = await callLLM('JOB_FIELD_EXTRACTION', { text });
+    const parsed = parseJsonSafely(llmResponse);
+
+    if (!parsed.ok) {
+      console.error('[Jobs] Failed to parse LLM response:', parsed.error);
+      return res.status(500).json({ 
+        error: 'Failed to extract job fields', 
+        details: parsed.error 
+      });
+    }
+
+    const extractedFields = parsed.json;
+
+    // Validate and format the response
+    const response = {
+      company_name: extractedFields.company_name || null,
+      role: extractedFields.role || null,
+      team: extractedFields.team || null,
+      seniority: extractedFields.seniority || null,
+      location: extractedFields.location || null,
+      job_type: extractedFields.job_type || null,
+      budget_info: extractedFields.budget_info || null,
+      must_have_skills: Array.isArray(extractedFields.must_have_skills) 
+        ? extractedFields.must_have_skills 
+        : [],
+      nice_to_have: Array.isArray(extractedFields.nice_to_have) 
+        ? extractedFields.nice_to_have 
+        : [],
+    };
+
+    console.log('[Jobs] Successfully extracted job fields');
+    res.json(response);
+  } catch (error) {
+    console.error('Error extracting job fields:', error);
+    res.status(500).json({ error: 'Internal server error', details: error.message });
+  }
+});
 
 // POST /api/jobs - Create job and enhance JD
 router.post('/', async (req, res) => {
