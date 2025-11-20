@@ -430,7 +430,8 @@ function extractBasicTagsFromJob(job) {
 }
 
 /**
- * Extract tags from resume text using embeddings
+ * Extract tags from resume text using LLM
+ * Extracts skills, languages, frameworks, tools, etc. directly from the resume
  */
 export async function extractTagsFromResume(resumeText) {
   try {
@@ -438,10 +439,51 @@ export async function extractTagsFromResume(resumeText) {
       return [];
     }
 
-    const embeddingTags = await findTagsUsingEmbeddings(resumeText, 20, 0.25);
+    // Import callLLM dynamically to avoid circular dependency
+    const { callLLM } = await import('./llm.js');
+    const { parseJsonSafely } = await import('./parseJsonSafely.js');
+
+    console.log('[Resume Tag Extraction] Extracting tags from resume using LLM...');
     
-    // Normalize tag names and remove duplicates
-    const tags = embeddingTags.map(item => normalizeTagName(item.tag));
+    // Truncate resume text if too long (LLM context limits)
+    const maxLength = 8000; // Keep reasonable length for LLM
+    const truncatedResume = resumeText.length > maxLength 
+      ? resumeText.substring(0, maxLength) + '...'
+      : resumeText;
+    
+    // Call LLM to extract tags
+    const rawResponse = await callLLM('RESUME_TAG_EXTRACTION', { resumeText: truncatedResume });
+    const parsed = parseJsonSafely(rawResponse);
+
+    if (!parsed.ok) {
+      console.error('[Resume Tag Extraction] Failed to parse LLM response:', parsed.error);
+      return [];
+    }
+
+    // Extract tags from LLM response
+    let tags = [];
+    
+    if (parsed.json.tags && Array.isArray(parsed.json.tags)) {
+      tags = parsed.json.tags;
+    } else if (parsed.json.categories) {
+      // If tags are in categories, flatten them
+      const categories = parsed.json.categories;
+      tags = [
+        ...(categories.languages || []),
+        ...(categories.frameworks || []),
+        ...(categories.tools || []),
+        ...(categories.skills || []),
+        ...(categories.domain || []),
+        ...(categories.certifications || []),
+      ];
+    }
+
+    // Normalize and deduplicate tags
+    tags = tags
+      .map(tag => normalizeTagName(tag.trim()))
+      .filter(tag => tag && tag.length > 0);
+
+    // Remove duplicates (case-insensitive)
     const uniqueTags = [];
     const seen = new Set();
     for (const tag of tags) {
@@ -451,10 +493,11 @@ export async function extractTagsFromResume(resumeText) {
         uniqueTags.push(tag);
       }
     }
-    
+
+    console.log(`[Resume Tag Extraction] Extracted ${uniqueTags.length} unique tags from resume`);
     return uniqueTags;
   } catch (error) {
-    console.error('[Embeddings] Error extracting tags from resume:', error);
+    console.error('[Resume Tag Extraction] Error extracting tags using LLM:', error);
     return [];
   }
 }

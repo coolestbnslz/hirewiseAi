@@ -66,6 +66,9 @@ SMTP_USERNAME=your_email@gmail.com
 SMTP_PASSWORD=your_app_password
 SMTP_FROM_EMAIL=your_email@gmail.com
 SMTP_FROM_NAME=HireWise Team
+
+# GitHub API Configuration (optional but recommended)
+GITHUB_TOKEN=your_github_personal_access_token
 ```
 
 **Configuration Notes:**
@@ -81,6 +84,13 @@ SMTP_FROM_NAME=HireWise Team
    - Set `SMTP_USERNAME` and `SMTP_PASSWORD`
    - Update `SMTP_FROM_EMAIL` and `SMTP_FROM_NAME`
    - If not configured, the system will work but emails won't be sent
+4. **GitHub API (Optional but Recommended)**:
+   - Create a GitHub Personal Access Token (PAT) with `public_repo` scope
+   - Go to GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic)
+   - Generate a new token with `public_repo` permission
+   - Set `GITHUB_TOKEN` in your `.env` file
+   - Without a token, GitHub API requests are rate-limited to 60 requests/hour
+   - With a token, you get 5,000 requests/hour
 
 4. Start MongoDB (if running locally):
 ```bash

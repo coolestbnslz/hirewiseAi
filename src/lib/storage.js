@@ -1,6 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { PDFParse } from 'pdf-parse';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -35,16 +36,37 @@ export async function saveUploadedFile(file) {
 }
 
 /**
- * Read file content as text (for text files)
+ * Read file content as text (supports PDF and text files)
  * @param {string} filepath - Path to file
- * @returns {Promise<string>} - File content
+ * @returns {Promise<string>} - File content as text
  */
 export async function readFileAsText(filepath) {
   try {
+    const ext = path.extname(filepath).toLowerCase();
+    
+    // Handle PDF files
+    if (ext === '.pdf') {
+      const dataBuffer = await fs.readFile(filepath);
+      const parser = new PDFParse({ data: dataBuffer });
+      const textResult = await parser.getText();
+      const text = textResult.text.trim();
+      
+      // Clean up parser resources
+      await parser.destroy();
+      
+      console.log(`[Storage] Extracted ${text.length} characters from PDF: ${path.basename(filepath)}`);
+      if (text.length < 100) {
+        console.warn(`[Storage] Warning: PDF extraction resulted in very little text (${text.length} chars). The PDF might be image-based or corrupted.`);
+      }
+      
+      return text;
+    }
+    
+    // Handle text files
     const content = await fs.readFile(filepath, 'utf-8');
     return content;
   } catch (error) {
-    console.error(`Error reading file ${filepath}:`, error);
+    console.error(`[Storage] Error reading file ${filepath}:`, error);
     return '';
   }
 }

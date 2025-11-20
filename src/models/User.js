@@ -34,6 +34,10 @@ const userSchema = new mongoose.Schema({
     type: String,
     trim: true,
   },
+  linkedinUrl: {
+    type: String,
+    trim: true,
+  },
   compensationExpectation: {
     type: String,
   },

@@ -11,6 +11,7 @@ import { saveUploadedFile, readFileAsText } from '../lib/storage.js';
 import { sendEmail } from '../lib/email.js';
 import { upload } from '../middleware/upload.js';
 import { v4 as uuidv4 } from 'uuid';
+import { fetchGitHubData, formatGitHubDataForLLM } from '../lib/github.js';
 
 const router = express.Router();
 
@@ -39,7 +40,7 @@ function calculateUnifiedScore(scores) {
 router.post('/:jobId', upload.single('resume'), async (req, res) => {
   try {
     const { jobId } = req.params;
-    const { applicant_email, applicant_name, applicant_phone, githubUrl, portfolioUrl, compensationExpectation } = req.body;
+    const { applicant_email, applicant_name, applicant_phone, githubUrl, portfolioUrl, linkedinUrl, compensationExpectation } = req.body;
 
     if (!req.file) {
       return res.status(400).json({ error: 'Resume file is required' });
@@ -59,20 +60,73 @@ router.post('/:jobId', upload.single('resume'), async (req, res) => {
     const resumePath = await saveUploadedFile(req.file);
     const resumeText = await readFileAsText(resumePath);
 
+    // Log extracted resume text for debugging
+    if (resumeText) {
+      console.log(`[Application] Extracted ${resumeText.length} characters from resume`);
+      console.log(`[Application] Resume text preview (first 500 chars): ${resumeText.substring(0, 500)}...`);
+    } else {
+      console.warn('[Application] Warning: No text extracted from resume file');
+    }
+
     // Find or create user
     let user = await User.findOne({ email: applicant_email.toLowerCase() });
     
-    // Extract tags from resume using embeddings
+    // Extract tags from resume using LLM
     let resumeTags = [];
-    if (resumeText) {
+    let resumeSummary = '';
+    if (resumeText && resumeText.trim().length > 0) {
       try {
         resumeTags = await extractTagsFromResume(resumeText);
-        console.log(`[Application] Extracted ${resumeTags.length} tags from resume using embeddings`);
+        console.log(`[Application] Extracted ${resumeTags.length} tags from resume using LLM`);
+        
+        // Generate resume summary using LLM
+        try {
+          const summaryResponse = await callLLM('RESUME_SUMMARY', { resumeText });
+          const summaryParsed = parseJsonSafely(summaryResponse);
+          if (summaryParsed.ok && summaryParsed.json.summary) {
+            resumeSummary = summaryParsed.json.summary;
+            console.log('[Application] Generated resume summary:', resumeSummary.substring(0, 200));
+          } else {
+            console.error('[Application] Failed to parse resume summary response:', summaryParsed.error);
+          }
+        } catch (error) {
+          console.error('[Application] Error generating resume summary:', error);
+          // Continue without summary if generation fails
+        }
       } catch (error) {
         console.error('[Application] Error extracting tags from resume:', error);
         // Continue without tags if extraction fails
       }
+    } else {
+      console.warn('[Application] Skipping resume processing: no valid resume text extracted');
     }
+    
+    // Calculate matched tags between resume and job
+    const jobTags = job.tags || [];
+    const matchedTags = [];
+    const resumeTagsLower = resumeTags.map(t => t.toLowerCase());
+    const jobTagsLower = jobTags.map(t => t.toLowerCase());
+    
+    for (const jobTag of jobTags) {
+      const jobTagLower = jobTag.toLowerCase();
+      // Check for exact match or partial match
+      if (resumeTagsLower.includes(jobTagLower)) {
+        matchedTags.push(jobTag);
+      } else {
+        // Check for partial matches (e.g., "React" matches "React.js")
+        const matched = resumeTagsLower.find(rt => 
+          rt.includes(jobTagLower) || jobTagLower.includes(rt)
+        );
+        if (matched) {
+          const originalTag = resumeTags.find(t => t.toLowerCase() === matched);
+          if (originalTag && !matchedTags.includes(originalTag)) {
+            matchedTags.push(originalTag);
+          }
+        }
+      }
+    }
+    
+    console.log(`[Application] Found ${matchedTags.length} matched tags out of ${jobTags.length} job tags`);
     
     if (!user) {
       user = new User({
@@ -83,8 +137,9 @@ router.post('/:jobId', upload.single('resume'), async (req, res) => {
         resumeText,
         githubUrl,
         portfolioUrl,
+        linkedinUrl,
         compensationExpectation,
-        tags: resumeTags, // Extracted using embeddings
+        tags: resumeTags, // Extracted using LLM
       });
     } else {
       // Update user info
@@ -95,6 +150,7 @@ router.post('/:jobId', upload.single('resume'), async (req, res) => {
       }
       if (githubUrl) user.githubUrl = githubUrl;
       if (portfolioUrl) user.portfolioUrl = portfolioUrl;
+      if (linkedinUrl) user.linkedinUrl = linkedinUrl;
       if (compensationExpectation) user.compensationExpectation = compensationExpectation;
     }
     await user.save();
@@ -107,16 +163,55 @@ router.post('/:jobId', upload.single('resume'), async (req, res) => {
     const resumeParsed = parseJsonSafely(resumeLLMResponse);
     const resumeScore = resumeParsed.ok ? resumeParsed.json.match_score : 0;
 
-    // Score GitHub/Portfolio
+    // Score GitHub/Portfolio and get summary
     let githubPortfolioScore = 0;
+    let githubPortfolioSummary = '';
     if (user.githubUrl || user.portfolioUrl) {
-      const githubLLMResponse = await callLLM('GITHUB_PORTFOLIO_SCORING', {
-        githubUrl: user.githubUrl,
-        portfolioUrl: user.portfolioUrl,
-        job,
-      });
-      const githubParsed = parseJsonSafely(githubLLMResponse);
-      githubPortfolioScore = githubParsed.ok ? githubParsed.json.score : 0;
+      try {
+        // Fetch actual GitHub data if GitHub URL is provided
+        let githubDataFormatted = '';
+        if (user.githubUrl) {
+          console.log(`[Application] Fetching GitHub data for: ${user.githubUrl}`);
+          const githubData = await fetchGitHubData(user.githubUrl);
+          githubDataFormatted = formatGitHubDataForLLM(githubData);
+          console.log(`[Application] Fetched GitHub data: ${githubData.error ? 'Error' : `${githubData.repositories?.length || 0} repositories`}`);
+        }
+
+        const githubLLMResponse = await callLLM('GITHUB_PORTFOLIO_SCORING', {
+          githubData: githubDataFormatted,
+          portfolioUrl: user.portfolioUrl,
+          job,
+        });
+        const githubParsed = parseJsonSafely(githubLLMResponse);
+        if (githubParsed.ok) {
+          githubPortfolioScore = githubParsed.json.score || 0;
+          githubPortfolioSummary = githubParsed.json.summary || '';
+          console.log('[Application] Generated GitHub/Portfolio summary:', githubPortfolioSummary.substring(0, 200));
+        } else {
+          console.error('[Application] Failed to parse GitHub/Portfolio response:', githubParsed.error);
+        }
+      } catch (error) {
+        console.error('[Application] Error processing GitHub/Portfolio:', error);
+        // Continue without GitHub/Portfolio score if processing fails
+      }
+    }
+    
+    // Generate LinkedIn summary
+    let linkedinSummary = '';
+    if (user.linkedinUrl) {
+      try {
+        const linkedinResponse = await callLLM('LINKEDIN_SUMMARY', {
+          linkedinUrl: user.linkedinUrl,
+        });
+        const linkedinParsed = parseJsonSafely(linkedinResponse);
+        if (linkedinParsed.ok && linkedinParsed.json.summary) {
+          linkedinSummary = linkedinParsed.json.summary;
+          console.log('[Application] Generated LinkedIn summary');
+        }
+      } catch (error) {
+        console.error('[Application] Error generating LinkedIn summary:', error);
+        // Continue without LinkedIn summary if generation fails
+      }
     }
 
     // Score compensation
@@ -187,6 +282,25 @@ router.post('/:jobId', upload.single('resume'), async (req, res) => {
       unifiedScore,
       scores,
       screeningId: screening?._id || null,
+      resume: {
+        summary: resumeSummary,
+        tags: resumeTags,
+        matchedTags: matchedTags,
+        totalTags: resumeTags.length,
+        matchedCount: matchedTags.length,
+        matchPercentage: jobTags.length > 0 ? Math.round((matchedTags.length / jobTags.length) * 100) : 0,
+      },
+      githubPortfolio: {
+        summary: githubPortfolioSummary,
+        score: githubPortfolioScore,
+      },
+      linkedin: {
+        summary: linkedinSummary,
+      },
+      job: {
+        tags: jobTags,
+        totalTags: jobTags.length,
+      },
     });
   } catch (error) {
     console.error('Error processing application:', error);

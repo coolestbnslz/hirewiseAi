@@ -126,35 +126,76 @@ Be thorough and accurate. Return ONLY valid JSON, no additional text.`;
  * Build prompt for GitHub/Portfolio scoring
  */
 function buildGitHubPortfolioScoringPrompt(payload) {
-  const { githubUrl, portfolioUrl, job } = payload;
+  const { githubData, portfolioUrl, job } = payload;
 
-  return `Evaluate a candidate's GitHub and/or Portfolio profile for a job position at Paytm (Indian fintech company).
+  let prompt = `You are an expert technical recruiter analyzing a candidate's GitHub profile and portfolio to evaluate their technical skills and project experience.
 
-Job Requirements:
+IMPORTANT: You MUST base your analysis ONLY on the actual GitHub data provided below. Do NOT use generic assumptions or templates.
+
+`;
+
+  // Add GitHub data if available
+  if (githubData && typeof githubData === 'string' && !githubData.includes('Error:')) {
+    prompt += `GitHub Profile Data (ACTUAL data fetched from GitHub API):
+${githubData}
+
+`;
+  } else if (githubData && typeof githubData === 'string' && githubData.includes('Error:')) {
+    prompt += `GitHub: ${githubData}\n\n`;
+  } else {
+    prompt += `GitHub: Not provided\n\n`;
+  }
+
+  // Add portfolio URL
+  if (portfolioUrl) {
+    prompt += `Portfolio URL: ${portfolioUrl}\n`;
+    prompt += `Note: Portfolio website content could not be automatically fetched. Consider the URL in your analysis.\n\n`;
+  } else {
+    prompt += `Portfolio: Not provided\n\n`;
+  }
+
+  // Add job context if available
+  if (job) {
+    prompt += `Job Context:
 - Role: ${job.role}
-- Company: Paytm (Indian fintech, Noida)
-- Required skills: ${job.must_have_skills?.join(', ') || 'None specified'}
+- Required Skills: ${job.must_have_skills?.join(', ') || 'Not specified'}
+- Nice-to-have: ${job.nice_to_have?.join(', ') || 'Not specified'}
 
-Candidate Profiles:
-${githubUrl ? `GitHub: ${githubUrl}` : 'No GitHub provided'}
-${portfolioUrl ? `Portfolio: ${portfolioUrl}` : 'No Portfolio provided'}
+`;
+  }
 
-Note: You cannot actually access these URLs, but based on typical evaluation criteria, provide a score.
+  prompt += `Your task:
+1. Analyze the ACTUAL GitHub repositories, projects, and technologies mentioned
+2. Identify specific projects the candidate has worked on (based on repository names and descriptions)
+3. Identify technologies, programming languages, and frameworks used (based on repository languages and topics)
+4. Evaluate the quality and relevance of their work
+5. Provide a score based on technical depth, project complexity, and relevance to the job
 
-Evaluation Context:
-- Consider relevance to Indian fintech market
-- Look for projects related to payment systems, UPI, digital wallets
-- Consider Indian market experience and understanding
-- Evaluate technical depth appropriate for Indian fintech industry
+CRITICAL RULES:
+- Use ONLY information from the GitHub data provided above
+- Do NOT add generic phrases like "likely worked on" or "may have experience"
+- Base your summary on ACTUAL repository names, descriptions, languages, and topics
+- If repositories are listed, mention specific project names and technologies
+- If no repositories are found, state that clearly
+- Do NOT make assumptions about projects not listed in the data
+
+Example of what NOT to do:
+❌ "Rahul Sharma appears to be a full-stack developer with a focus on web technologies. His repositories likely include projects built with React, Node.js, and Express. He may have contributed to open-source projects..."
+
+Example of what TO do:
+✅ "Based on the GitHub profile data, the candidate has [X] repositories including [specific repository names from the data]. Key projects: [actual project names]. Technologies used: [actual languages from repository data like JavaScript, Python, etc.]. The candidate has [X] stars and [X] forks across their repositories."
 
 Return a JSON object:
 {
   "score": 0-100,
   "confidence": 0-1,
-  "analysis": "Brief analysis of the profile quality and relevance to Paytm and Indian fintech market"
+  "summary": "Accurate summary based EXACTLY on the GitHub data provided, mentioning specific projects, technologies, and work experience",
+  "analysis": "Brief analysis of the profile quality and technical depth based on actual data"
 }
 
 Return ONLY valid JSON, no additional text.`;
+
+  return prompt;
 }
 
 /**
@@ -321,6 +362,133 @@ Return a JSON object with this structure:
     {"text": "Question 2 text", "time_limit_sec": 90, "type": "video"},
     {"text": "Question 3 text", "time_limit_sec": 150, "type": "video"}
   ]
+}
+
+Return ONLY valid JSON, no additional text.`;
+}
+
+/**
+ * Build prompt for generating resume summary
+ */
+function buildResumeSummaryPrompt(payload) {
+  const { resumeText } = payload;
+
+  // Use more context for better accuracy
+  const resumeContext = resumeText.substring(0, 12000);
+  const isTruncated = resumeText.length > 12000;
+
+  return `You are an expert HR analyst creating a brief summary of a candidate's resume based on their ACTUAL profile and work experience.
+
+IMPORTANT: You MUST base your summary ONLY on the resume text provided below. Do NOT use generic templates or assumptions.
+
+Resume Text (extracted from the candidate's actual resume):
+${resumeContext}${isTruncated ? '\n\n[Note: Resume text truncated for length]' : ''}
+
+Your task:
+1. Read the resume text carefully
+2. Identify the candidate's actual:
+   - Years of experience (if mentioned)
+   - Current/previous job titles and companies (if mentioned)
+   - Specific technologies, programming languages, frameworks mentioned
+   - Specific projects, achievements, or contributions mentioned
+   - Education details (if mentioned)
+   - Any certifications (if mentioned)
+3. Create a concise, professional summary (2-3 sentences) that accurately reflects what is ACTUALLY in the resume
+
+CRITICAL RULES:
+- Use ONLY information that is explicitly stated in the resume text above
+- Do NOT add generic phrases like "2+ years of experience" unless the resume explicitly states this
+- Do NOT mention technologies unless they are explicitly listed in the resume
+- Do NOT mention companies (like Paytm) unless they appear in the resume
+- Do NOT use placeholder text or generic descriptions
+- If the resume mentions specific projects, achievements, or roles, include them accurately
+- If years of experience are not explicitly stated, do not guess or assume
+
+Example of what NOT to do:
+❌ "Software engineer with 2+ years of experience in full-stack development" (if resume doesn't explicitly state this)
+
+Example of what TO do:
+✅ "Software engineer with experience in React and Node.js, having worked on payment gateway integration projects" (only if these are actually mentioned in the resume)
+
+Return a JSON object:
+{
+  "summary": "Accurate 2-3 sentence summary based EXACTLY on what is written in the resume text provided above"
+}
+
+Return ONLY valid JSON, no additional text.`;
+}
+
+/**
+ * Build prompt for generating LinkedIn summary
+ */
+function buildLinkedInSummaryPrompt(payload) {
+  const { linkedinUrl } = payload;
+
+  return `Analyze a candidate's LinkedIn profile and provide a summary of their professional background and skills.
+
+LinkedIn Profile:
+${linkedinUrl ? `LinkedIn: ${linkedinUrl}` : 'No LinkedIn provided'}
+
+Note: You cannot actually access this URL. Based on typical LinkedIn profiles, provide:
+1. A summary of their professional background
+2. Work experience and roles
+3. Skills and expertise areas
+4. Education and certifications
+5. Notable achievements or endorsements
+
+Return a JSON object:
+{
+  "summary": "Summary of the candidate's professional background, work experience, skills, and achievements based on their LinkedIn profile"
+}
+
+Return ONLY valid JSON, no additional text.`;
+}
+
+/**
+ * Build prompt for extracting tags from resume text
+ */
+function buildResumeTagExtractionPrompt(payload) {
+  const { resumeText } = payload;
+
+  return `You are an expert HR analyst extracting relevant tags from a candidate's resume.
+
+Resume Text:
+${resumeText.substring(0, 8000)}${resumeText.length > 8000 ? '...' : ''}
+
+Extract tags ONLY from what is explicitly mentioned in the resume. Do NOT add tags that are not present in the resume. Include:
+
+1. **Programming Languages**: JavaScript, TypeScript, Python, Java, Go, etc.
+2. **Frameworks & Libraries**: React, Node.js, Express, Django, Spring Boot, etc.
+3. **Tools & Technologies**: Docker, Kubernetes, AWS, MongoDB, PostgreSQL, etc.
+4. **Skills & Expertise**: Full Stack, Backend, Frontend, DevOps, Machine Learning, etc.
+5. **Domain/Industry**: Fintech, Payment Systems, E-commerce, Banking, etc.
+6. **Methodologies**: Agile, Scrum, TDD, CI/CD, etc.
+7. **Certifications**: AWS Certified, Google Cloud, etc.
+8. **Education**: Degree, University (if relevant)
+9. **Other relevant technologies**: Git, REST API, GraphQL, Microservices, etc.
+
+Extract tags ONLY from what is explicitly stated in the resume:
+- Technologies explicitly mentioned in the resume
+- Skills explicitly listed or mentioned
+- Tools and platforms explicitly mentioned
+- Programming languages explicitly mentioned
+- Frameworks explicitly mentioned
+- Certifications explicitly mentioned
+- Education degrees if relevant to the role
+
+IMPORTANT: Do NOT infer or add tags that are not explicitly mentioned in the resume. Only extract what is clearly stated.
+
+Return a JSON object:
+{
+  "tags": ["tag1", "tag2", "tag3", ...],
+  "categories": {
+    "languages": ["JavaScript", "TypeScript", ...],
+    "frameworks": ["React", "Node.js", ...],
+    "tools": ["Docker", "AWS", ...],
+    "skills": ["Full Stack", "Backend", ...],
+    "domain": ["Fintech", "Payment Systems"],
+    "certifications": ["AWS Certified", ...]
+  }
 }
 
 Return ONLY valid JSON, no additional text.`;
@@ -668,6 +836,21 @@ export async function callLLM(promptName, payload) {
     case 'TAG_EXTRACTION':
       prompt = buildTagExtractionPrompt(payload);
       temperature = 0.5; // Moderate temperature for balanced extraction
+      break;
+
+    case 'RESUME_TAG_EXTRACTION':
+      prompt = buildResumeTagExtractionPrompt(payload);
+      temperature = 0.5; // Moderate temperature for balanced extraction
+      break;
+
+    case 'RESUME_SUMMARY':
+      prompt = buildResumeSummaryPrompt(payload);
+      temperature = 0.6; // Slightly creative for summary generation
+      break;
+
+    case 'LINKEDIN_SUMMARY':
+      prompt = buildLinkedInSummaryPrompt(payload);
+      temperature = 0.6; // Slightly creative for summary generation
       break;
 
     default:
