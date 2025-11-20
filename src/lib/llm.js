@@ -23,22 +23,26 @@ const MODEL_CONFIG = {
   // Critical tasks requiring highest accuracy (resume scoring, video scoring)
   CRITICAL: LLM_PROVIDER === 'openai' 
     ? (process.env.LLM_MODEL_CRITICAL || 'gpt-4o')
-    : (process.env.BEDROCK_MODEL_CRITICAL || 'us.anthropic.claude-3-opus-20240229-v1:0'),
+    : (process.env.BEDROCK_MODEL_CRITICAL || 'anthropic.claude-3-opus-20240229-v1:0'),
   
   // Standard tasks (JD enhancement, email generation, screening questions)
   STANDARD: LLM_PROVIDER === 'openai' 
     ? (process.env.LLM_MODEL_STANDARD || 'gpt-4o')
-    : (process.env.BEDROCK_MODEL_STANDARD || 'us.anthropic.claude-3-5-sonnet-20241022-v1:0'),
+    : (process.env.BEDROCK_MODEL_STANDARD || 'anthropic.claude-3-5-sonnet-20241022-v1:0'),
   
   // Simple/fast tasks (compensation analysis, github scoring)
   FAST: LLM_PROVIDER === 'openai' 
     ? (process.env.LLM_MODEL_FAST || 'gpt-4o-mini')
-    : (process.env.BEDROCK_MODEL_FAST || 'us.anthropic.claude-3-5-haiku-20241022-v1:0'),
+    : (process.env.BEDROCK_MODEL_FAST || 'anthropic.claude-3-5-haiku-20241022-v1:0'),
   
   // Default fallback
   DEFAULT: LLM_PROVIDER === 'openai' 
     ? (process.env.LLM_MODEL_ID || 'gpt-4o')
-    : (process.env.BEDROCK_MODEL_ID || 'us.anthropic.claude-3-5-sonnet-20241022-v1:0'),
+    : (process.env.BEDROCK_MODEL_ID || 'anthropic.claude-3-5-sonnet-20241022-v1:0'),
+
+  CRITERIA_CHECK: LLM_PROVIDER === 'openai' 
+    ? (process.env.LLM_MODEL_CRITERIA_CHECK || 'gpt-4o')
+    : (process.env.BEDROCK_MODEL_CRITERIA_CHECK || 'amazon.nova-micro-v1:0'),
 };
 
 /**
@@ -831,6 +835,10 @@ function getModelForTask(promptName) {
   // Fast tasks - use faster/cheaper model
   if (promptName === 'GITHUB_PORTFOLIO_SCORING' || promptName === 'COMPENSATION_ANALYSIS') {
     return MODEL_CONFIG.FAST;
+  }
+
+  if (promptName === 'CRITERIA_CHECK') {
+    return MODEL_CONFIG.CRITERIA_CHECK;
   }
   
   // Standard tasks - use balanced model
