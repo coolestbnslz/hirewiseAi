@@ -412,7 +412,6 @@ router.post('/:jobId', upload.single('resume'), async (req, res) => {
       skillsMissing,
       topReasons,
       recommendedAction,
-      resumeSummary,
       consent_given: false,
       level1_approved: false,
       matchId: existingMatch?._id || null,

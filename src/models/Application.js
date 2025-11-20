@@ -59,9 +59,6 @@ const applicationSchema = new mongoose.Schema({
     type: String,
     enum: ['yes', 'maybe', 'no'],
   },
-  resumeSummary: {
-    type: String,
-  },
   consent_given: {
     type: Boolean,
     default: false,
