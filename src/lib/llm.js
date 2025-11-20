@@ -138,6 +138,46 @@ Return ONLY valid JSON, no additional text.`;
 }
 
 /**
+ * Build prompt for candidate scoring against search criteria
+ */
+function buildCandidateSearchScoringPrompt(payload) {
+  const { resumeText, searchCriteria, searchQuery } = payload;
+
+  return `You are an expert recruiter evaluating a candidate's resume against search criteria for Paytm (Indian fintech company).
+
+Search Query: "${searchQuery}"
+
+Search Criteria:
+- Required Skills/Tags: ${searchCriteria.tags?.join(', ') || 'None specified'}
+- Resume Keywords: ${searchCriteria.resumeKeywords?.join(', ') || 'None specified'}
+- Location: ${searchCriteria.location || 'Not specified'}
+- Experience Level: ${searchCriteria.experienceLevel || 'Not specified'}
+- Other Requirements: ${JSON.stringify(searchCriteria, null, 2)}
+
+Candidate Resume:
+${resumeText || 'No resume text available'}
+
+Evaluate the candidate considering:
+- Match with required skills and technologies
+- Relevance to search criteria
+- Indian market experience and fintech/payment industry knowledge (if relevant)
+- Experience with Indian payment systems (UPI, digital wallets, payment gateways) if fintech-related
+- Overall fit for the search requirements
+
+Analyze the resume and return a JSON object with:
+{
+  "match_score": 0-100,
+  "confidence": 0-1,
+  "skills_matched": ["skill1", "skill2", ...],
+  "skills_missing": ["skill1", "skill2", ...],
+  "recommended_action": "yes" | "maybe" | "no",
+  "top_reasons": ["reason1", "reason2", "reason3", "reason4"]
+}
+
+Be thorough and fair. Return ONLY valid JSON, no additional text.`;
+}
+
+/**
  * Build prompt for resume scoring
  */
 function buildResumeScoringPrompt(payload) {
@@ -1076,7 +1116,7 @@ async function callLLMProvider(prompt, systemPrompt = null, modelId = null, temp
  */
 function getModelForTask(promptName) {
   // Critical tasks - use best model for highest accuracy
-  if (promptName === 'RESUME_SCORING' || promptName === 'VIDEO_SCORING') {
+  if (promptName === 'RESUME_SCORING' || promptName === 'VIDEO_SCORING' || promptName === 'CANDIDATE_SEARCH_SCORING') {
     return MODEL_CONFIG.CRITICAL;
   }
   
@@ -1178,6 +1218,12 @@ export async function callLLM(promptName, payload) {
       prompt = buildResumeParserPrompt(payload);
       systemPrompt += ' Extract all information accurately and structure it precisely.';
       temperature = 0.3; // Lower temperature for accurate, consistent parsing
+      break;
+
+    case 'CANDIDATE_SEARCH_SCORING':
+      prompt = buildCandidateSearchScoringPrompt(payload);
+      systemPrompt += ' Be precise and consistent in your scoring.';
+      temperature = 0.3; // Lower temperature for more consistent, objective scoring
       break;
 
     case 'CANDIDATE_SEARCH':

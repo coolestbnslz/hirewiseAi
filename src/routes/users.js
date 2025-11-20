@@ -202,29 +202,86 @@ router.post('/search', async (req, res) => {
 
     console.log(`[CandidateSearch] Found ${totalResults} candidates (returning ${results.length})`);
 
+    // Score each candidate against search criteria using LLM
+    const scoredResults = await Promise.all(
+      results.map(async (user) => {
+        let matchScore = 0;
+        let skillsMatched = [];
+        let skillsMissing = [];
+        let topReasons = [];
+        let recommendedAction = null;
+
+        // Only score if resume text is available
+        if (user.resumeText && user.resumeText.trim().length > 0) {
+          try {
+            console.log(`[CandidateSearch] Scoring candidate: ${user.name} (${user._id})`);
+            const scoringResponse = await callLLM('CANDIDATE_SEARCH_SCORING', {
+              resumeText: user.resumeText,
+              searchCriteria,
+              searchQuery: query,
+            });
+            const scoringParsed = parseJsonSafely(scoringResponse);
+            
+            if (scoringParsed.ok) {
+              matchScore = scoringParsed.json.match_score || 0;
+              skillsMatched = scoringParsed.json.skills_matched || [];
+              skillsMissing = scoringParsed.json.skills_missing || [];
+              topReasons = scoringParsed.json.top_reasons || [];
+              recommendedAction = scoringParsed.json.recommended_action || null;
+              console.log(`[CandidateSearch] Scored candidate ${user.name}: ${matchScore}`);
+            } else {
+              console.error(`[CandidateSearch] Failed to parse scoring for ${user.name}:`, scoringParsed.error);
+            }
+          } catch (error) {
+            console.error(`[CandidateSearch] Error scoring candidate ${user.name}:`, error);
+            // Continue without score if scoring fails
+          }
+        } else {
+          console.log(`[CandidateSearch] Skipping score for ${user.name}: no resume text`);
+        }
+
+        return {
+          id: user._id,
+          name: user.name,
+          email: user.email,
+          phone: user.phone,
+          tags: user.tags,
+          githubUrl: user.githubUrl,
+          portfolioUrl: user.portfolioUrl,
+          linkedinUrl: user.linkedinUrl,
+          compensationExpectation: user.compensationExpectation,
+          isHired: user.isHired,
+          hiredAt: user.hiredAt,
+          createdAt: user.createdAt,
+          updatedAt: user.updatedAt,
+          resumeSummary: user.resumeSummary,
+          parsedResume: user.parsedResume,
+          // Scoring information
+          matchScore,
+          skillsMatched,
+          skillsMissing,
+          topReasons,
+          recommendedAction,
+        };
+      })
+    );
+
+    // Sort by match score (highest first) if scores are available
+    scoredResults.sort((a, b) => {
+      if (a.matchScore > 0 || b.matchScore > 0) {
+        return b.matchScore - a.matchScore;
+      }
+      // If no scores, maintain original order (most recent first)
+      return 0;
+    });
+
     res.json({
       query,
       explanation,
       totalResults,
       limit: parseInt(limit),
       skip: parseInt(skip),
-      results: results.map(user => ({
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        phone: user.phone,
-        tags: user.tags,
-        githubUrl: user.githubUrl,
-        portfolioUrl: user.portfolioUrl,
-        linkedinUrl: user.linkedinUrl,
-        compensationExpectation: user.compensationExpectation,
-        isHired: user.isHired,
-        hiredAt: user.hiredAt,
-        createdAt: user.createdAt,
-        updatedAt: user.updatedAt,
-        resumeSummary: user.resumeSummary,
-        parsedResume: user.parsedResume,
-      })),
+      results: scoredResults,
     });
   } catch (error) {
     console.error('[CandidateSearch] Error searching candidates:', error);
