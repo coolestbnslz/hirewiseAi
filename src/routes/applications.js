@@ -66,7 +66,7 @@ router.get('/job/:jobId', async (req, res) => {
 
     // Fetch applications with populated user data
     const applications = await Application.find(query)
-      .populate('userId', 'name email phone githubUrl portfolioUrl linkedinUrl compensationExpectation tags')
+      .populate('userId', 'name email phone githubUrl portfolioUrl linkedinUrl compensationExpectation tags resumeSummary parsedResume')
       .populate('matchId', 'matchScore status')
       .sort(sort)
       .limit(parseInt(limit))
