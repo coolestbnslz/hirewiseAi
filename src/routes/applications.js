@@ -255,9 +255,13 @@ router.post('/:jobId', upload.single('resume'), async (req, res) => {
     } else {
       // Update user info
       if (resumePath) user.resumePath = resumePath;
+      if(applicant_name) user.name = applicant_name;
+      if(applicant_phone) user.phone = applicant_phone;
+      if(applicant_email) user.email = applicant_email.toLowerCase();
       if (resumeText) {
         user.resumeText = resumeText;
         user.tags = resumeTags; // Update tags with embeddings-based extraction
+        
       }
       if (githubUrl) user.githubUrl = githubUrl;
       if (portfolioUrl) user.portfolioUrl = portfolioUrl;
