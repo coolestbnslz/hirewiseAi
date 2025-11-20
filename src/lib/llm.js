@@ -45,14 +45,16 @@ const MODEL_CONFIG = {
  * Build prompt for JD enhancement
  */
 function buildJDEnhancerPrompt(payload) {
-  const { raw_jd, company_name, role, seniority, budget_info, must_have_skills, nice_to_have } = payload;
+  const { raw_jd, company_name, role, team, seniority, location, job_type, budget_info, must_have_skills, nice_to_have } = payload;
 
   return `You are an expert HR consultant helping to enhance a job description for Paytm, an Indian fintech company.
 
 Company: ${company_name} (Indian fintech company, based in Noida)
 Role: ${role}
+Team: ${team || 'Not specified'}
 Seniority: ${seniority || 'Not specified'}
-Budget: ${budget_info || 'Not specified'} (in INR - Indian Rupees)
+Location: ${location || 'Noida, Delhi NCR'}
+Job Type: ${job_type || 'Full-time'}
 Must-have skills: ${must_have_skills?.join(', ') || 'None specified'}
 Nice-to-have skills: ${nice_to_have?.join(', ') || 'None specified'}
 
@@ -63,17 +65,21 @@ Please enhance this job description with Indian context:
 - Mention Paytm's position in the Indian fintech market
 - Reference Indian payment systems, UPI, digital payments if relevant
 - Use Indian English conventions
-- Include location context (Noida/Delhi NCR) if appropriate
-- Ensure compensation is in INR format
+- Include location context (${location || 'Noida/Delhi NCR'}) and work arrangement (${job_type || 'Full-time'})
+- Mention the team/department (${team || 'Engineering'}) if specified
+- DO NOT include salary range, compensation, or budget information in the enhanced job description
+- Focus on role responsibilities, requirements, company culture, and growth opportunities
 
 Return a JSON object with the following structure:
 {
-  "enhanced_jd": "Enhanced, professional job description (2-3 paragraphs) with Indian context",
+  "enhanced_jd": "Enhanced, professional job description (2-3 paragraphs) with Indian context, WITHOUT any salary or compensation information",
   "apply_form_fields": [
     {"name": "email", "type": "email", "label": "Email Address", "required": true},
     {"name": "phone", "type": "tel", "label": "Phone Number", "required": false}
   ]
 }
+
+IMPORTANT: The enhanced_jd must NOT contain any mention of salary, compensation, budget, pay scale, CTC, LPA, or any monetary information. Focus only on the role, responsibilities, requirements, and company benefits (non-monetary).
 
 Note: Tags are extracted separately using embeddings for better semantic matching, and screening questions are generated dynamically on-the-spot when candidates submit videos.
 Return ONLY valid JSON, no additional text.`;
@@ -279,7 +285,10 @@ function buildScreeningQuestionsPrompt(payload) {
 Job Details:
 - Role: ${job.role}
 - Company: ${job.company_name} (Paytm - Indian fintech, Noida)
+- Team: ${job.team || 'Not specified'}
 - Seniority: ${job.seniority || 'Not specified'}
+- Location: ${job.location || 'Noida, Delhi NCR'}
+- Job Type: ${job.job_type || 'Full-time'}
 - Must-have skills: ${job.must_have_skills?.join(', ') || 'None specified'}
 - Nice-to-have skills: ${job.nice_to_have?.join(', ') || 'None specified'}
 - Job Description: ${(job.enhanced_jd || job.raw_jd).substring(0, 500)}
@@ -312,6 +321,62 @@ Return a JSON object with this structure:
     {"text": "Question 2 text", "time_limit_sec": 90, "type": "video"},
     {"text": "Question 3 text", "time_limit_sec": 150, "type": "video"}
   ]
+}
+
+Return ONLY valid JSON, no additional text.`;
+}
+
+/**
+ * Build prompt for extracting tags from job description
+ */
+function buildTagExtractionPrompt(payload) {
+  const { job } = payload;
+
+  return `You are an expert HR analyst extracting relevant tags from a job description for Paytm (Indian fintech company).
+
+Job Description:
+- Role: ${job.role}
+- Company: ${job.company_name || 'Paytm'}
+- Team: ${job.team || 'Not specified'}
+- Seniority: ${job.seniority || 'Not specified'}
+- Location: ${job.location || 'Noida, Delhi NCR, India'}
+- Job Type: ${job.job_type || 'Full-time'}
+- Must-have skills: ${job.must_have_skills?.join(', ') || 'None specified'}
+- Nice-to-have skills: ${job.nice_to_have?.join(', ') || 'None specified'}
+- Job Description Text:
+${job.enhanced_jd || job.raw_jd}
+
+Extract comprehensive tags from this job description. Include:
+
+1. **Programming Languages**: JavaScript, TypeScript, Python, Java, Go, etc.
+2. **Frameworks & Libraries**: React, Node.js, Express, Django, Spring Boot, etc.
+3. **Tools & Technologies**: Docker, Kubernetes, AWS, MongoDB, PostgreSQL, etc.
+4. **Skills & Expertise**: Full Stack, Backend, Frontend, DevOps, Machine Learning, etc.
+5. **Job Type**: Full-time, Remote, Hybrid, On-site
+6. **Location**: Noida, Delhi NCR, Bangalore, Mumbai, etc.
+7. **Domain/Industry**: Fintech, Payment Systems, Digital Payments, Banking, etc.
+8. **Methodologies**: Agile, Scrum, TDD, CI/CD, etc.
+9. **Other relevant technologies**: Git, REST API, GraphQL, Microservices, etc.
+
+Extract ALL relevant tags from the job description. Be thorough and include:
+- Technologies mentioned explicitly
+- Technologies implied by the role/skills
+- Industry/domain terms
+- Location information
+- Job type and work arrangement
+
+Return a JSON object:
+{
+  "tags": ["tag1", "tag2", "tag3", ...],
+  "categories": {
+    "languages": ["JavaScript", "TypeScript", ...],
+    "frameworks": ["React", "Node.js", ...],
+    "tools": ["Docker", "AWS", ...],
+    "skills": ["Full Stack", "Backend", ...],
+    "location": ["Noida", "Delhi NCR"],
+    "job_type": ["Full-time"],
+    "domain": ["Fintech", "Payment Systems"]
+  }
 }
 
 Return ONLY valid JSON, no additional text.`;
@@ -546,7 +611,7 @@ function getModelForTask(promptName) {
   }
   
   // Standard tasks - use balanced model
-  // JD_ENHANCER, EMAIL_GENERATOR, SCREENING_QUESTIONS
+  // JD_ENHANCER, EMAIL_GENERATOR, SCREENING_QUESTIONS, TAG_EXTRACTION
   return MODEL_CONFIG.STANDARD;
 }
 
@@ -598,6 +663,11 @@ export async function callLLM(promptName, payload) {
     case 'SCREENING_QUESTIONS':
       prompt = buildScreeningQuestionsPrompt(payload);
       temperature = 0.7; // Creative but relevant questions
+      break;
+
+    case 'TAG_EXTRACTION':
+      prompt = buildTagExtractionPrompt(payload);
+      temperature = 0.5; // Moderate temperature for balanced extraction
       break;
 
     default:

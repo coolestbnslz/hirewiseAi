@@ -116,9 +116,9 @@ export async function generateEmbedding(text) {
       throw new Error('AWS Bearer token not configured. Please set AWS_BEARER_TOKEN_BEDROCK in your .env file.');
     }
 
-    // Titan Embeddings API expects inputText as an array
+    // Titan Embeddings API expects inputText as a string (not an array)
     const body = {
-      inputText: [text],
+      inputText: text,
     };
 
     // Prepare request URL (embeddings use /invoke endpoint, not /converse)
@@ -159,9 +159,9 @@ export async function generateEmbedding(text) {
     const responseBody = await response.json();
 
     // Titan embeddings returns embedding in the response
-    // Format: { "embedding": [[0.1, 0.2, ...]] } (array of arrays, one per input text)
-    // Since we send one text, we get one embedding array
-    const embedding = responseBody.embedding?.[0] || responseBody.embeddingVector || responseBody.embeddings?.[0];
+    // Format: { "embedding": [0.1, 0.2, ...] } (single array for single input text)
+    // Since we send one text as a string, we get one embedding array directly
+    const embedding = responseBody.embedding || responseBody.embeddingVector || responseBody.embeddings?.[0];
     
     if (!embedding || !Array.isArray(embedding)) {
       console.error('[Embeddings] Unexpected response format:', responseBody);
@@ -209,21 +209,37 @@ function cosineSimilarity(embedding1, embedding2) {
 export async function findTagsUsingEmbeddings(text, topK = 10, minSimilarity = 0.3) {
   try {
     // Generate embedding for the input text
+    console.log('[Embeddings] Generating embedding for input text...');
     const textEmbedding = await generateEmbedding(text);
+    console.log('[Embeddings] Input text embedding generated');
 
     // Generate embeddings for all common tags (use cache if available)
     const tagEmbeddings = [];
+    const totalTags = COMMON_TAGS.length;
+    let cachedCount = 0;
+    let generatedCount = 0;
+    
+    console.log(`[Embeddings] Processing ${totalTags} tags (checking cache first)...`);
     
     // Check cache first, generate if not cached
-    for (const tag of COMMON_TAGS) {
+    for (let i = 0; i < COMMON_TAGS.length; i++) {
+      const tag = COMMON_TAGS[i];
       let embedding;
       
       if (tagEmbeddingsCache.has(tag)) {
         embedding = tagEmbeddingsCache.get(tag);
+        cachedCount++;
+        if ((i + 1) % 50 === 0) {
+          console.log(`[Embeddings] Progress: ${i + 1}/${totalTags} tags processed (${cachedCount} cached, ${generatedCount} generated)`);
+        }
       } else {
         try {
           embedding = await generateEmbedding(tag);
           tagEmbeddingsCache.set(tag, embedding); // Cache for future use
+          generatedCount++;
+          if (generatedCount % 10 === 0) {
+            console.log(`[Embeddings] Generated ${generatedCount} new tag embeddings (${i + 1}/${totalTags} total)`);
+          }
         } catch (error) {
           console.error(`[Embeddings] Error generating embedding for tag "${tag}":`, error);
           continue; // Skip this tag if embedding fails
@@ -232,6 +248,9 @@ export async function findTagsUsingEmbeddings(text, topK = 10, minSimilarity = 0
       
       tagEmbeddings.push({ tag, embedding });
     }
+
+    console.log(`[Embeddings] Completed processing all tags: ${cachedCount} cached, ${generatedCount} generated, ${tagEmbeddings.length} total`);
+    console.log(`[Embeddings] Calculating similarity scores...`);
 
     // Calculate similarity scores
     const similarities = tagEmbeddings
@@ -243,6 +262,7 @@ export async function findTagsUsingEmbeddings(text, topK = 10, minSimilarity = 0
       .sort((a, b) => b.similarity - a.similarity)
       .slice(0, topK);
 
+    console.log(`[Embeddings] Found ${similarities.length} matching tags (top ${topK} with similarity >= ${minSimilarity})`);
     return similarities;
   } catch (error) {
     console.error('[Embeddings] Error finding tags:', error);
@@ -288,46 +308,50 @@ function normalizeTagName(tag) {
 }
 
 /**
- * Extract tags from job description using embeddings
- * Combines embeddings-based matching with explicit skills from job
+ * Extract tags from job description using LLM
+ * Extracts skills, languages, frameworks, tools, location, job type, etc. directly from the job description
  */
 export async function extractTagsFromJob(job) {
   try {
-    // Combine job description text
-    const jobText = [
-      job.raw_jd || '',
-      job.role || '',
-      job.seniority || '',
-      ...(job.must_have_skills || []),
-      ...(job.nice_to_have || []),
-    ].filter(Boolean).join(' ');
+    // Import callLLM dynamically to avoid circular dependency
+    const { callLLM } = await import('./llm.js');
+    const { parseJsonSafely } = await import('./parseJsonSafely.js');
 
-    // Find tags using embeddings
-    const embeddingTags = await findTagsUsingEmbeddings(jobText, 20, 0.25);
+    console.log('[Tag Extraction] Extracting tags from job description using LLM...');
+    
+    // Call LLM to extract tags
+    const rawResponse = await callLLM('TAG_EXTRACTION', { job });
+    const parsed = parseJsonSafely(rawResponse);
 
-    // Extract and normalize tag names
-    let tags = embeddingTags.map(item => normalizeTagName(item.tag));
-
-    // Add explicit skills if not already included (normalize them too)
-    const allSkills = [
-      ...(job.must_have_skills || []),
-      ...(job.nice_to_have || []),
-    ];
-
-    allSkills.forEach(skill => {
-      const normalizedSkill = normalizeTagName(skill.trim());
-      if (normalizedSkill && !tags.some(t => t.toLowerCase() === normalizedSkill.toLowerCase())) {
-        tags.push(normalizedSkill);
-      }
-    });
-
-    // Add role and seniority if not already included
-    if (job.role) {
-      const normalizedRole = normalizeTagName(job.role);
-      if (!tags.some(t => t.toLowerCase().includes(normalizedRole.toLowerCase()))) {
-        tags.push(normalizedRole);
-      }
+    if (!parsed.ok) {
+      console.error('[Tag Extraction] Failed to parse LLM response:', parsed.error);
+      // Fallback to basic tags from job fields
+      return extractBasicTagsFromJob(job);
     }
+
+    // Extract tags from LLM response
+    let tags = [];
+    
+    if (parsed.json.tags && Array.isArray(parsed.json.tags)) {
+      tags = parsed.json.tags;
+    } else if (parsed.json.categories) {
+      // If tags are in categories, flatten them
+      const categories = parsed.json.categories;
+      tags = [
+        ...(categories.languages || []),
+        ...(categories.frameworks || []),
+        ...(categories.tools || []),
+        ...(categories.skills || []),
+        ...(categories.location || []),
+        ...(categories.job_type || []),
+        ...(categories.domain || []),
+      ];
+    }
+
+    // Normalize and deduplicate tags
+    tags = tags
+      .map(tag => normalizeTagName(tag.trim()))
+      .filter(tag => tag && tag.length > 0);
 
     // Remove duplicates (case-insensitive)
     const uniqueTags = [];
@@ -340,17 +364,69 @@ export async function extractTagsFromJob(job) {
       }
     }
 
-    // Limit to top 25 tags
-    return uniqueTags.slice(0, 25);
-  } catch (error) {
-    console.error('[Embeddings] Error extracting tags from job:', error);
-    // Fallback to basic tags
-    return [
-      job.role,
+    // Always add explicit skills from job if not already included
+    const allSkills = [
       ...(job.must_have_skills || []),
       ...(job.nice_to_have || []),
-    ].filter(Boolean).map(t => normalizeTagName(t));
+    ];
+
+    allSkills.forEach(skill => {
+      const normalizedSkill = normalizeTagName(skill.trim());
+      const lower = normalizedSkill.toLowerCase();
+      if (normalizedSkill && !seen.has(lower)) {
+        seen.add(lower);
+        uniqueTags.push(normalizedSkill);
+      }
+    });
+
+    console.log(`[Tag Extraction] Extracted ${uniqueTags.length} unique tags from job description`);
+    return uniqueTags;
+  } catch (error) {
+    console.error('[Tag Extraction] Error extracting tags using LLM:', error);
+    // Fallback to basic tags from job fields
+    return extractBasicTagsFromJob(job);
   }
+}
+
+/**
+ * Fallback function to extract basic tags from job fields when LLM extraction fails
+ */
+function extractBasicTagsFromJob(job) {
+  const tags = [];
+  
+  // Add explicit skills
+  if (job.must_have_skills) {
+    tags.push(...job.must_have_skills.map(s => normalizeTagName(s.trim())));
+  }
+  if (job.nice_to_have) {
+    tags.push(...job.nice_to_have.map(s => normalizeTagName(s.trim())));
+  }
+  
+  // Add role and seniority
+  if (job.role) {
+    tags.push(normalizeTagName(job.role));
+  }
+  if (job.seniority) {
+    tags.push(normalizeTagName(job.seniority));
+  }
+  
+  // Add location if available
+  if (job.location) {
+    tags.push(normalizeTagName(job.location));
+  }
+  
+  // Add job type if available
+  if (job.job_type) {
+    tags.push(normalizeTagName(job.job_type));
+  }
+  
+  // Add team if available
+  if (job.team) {
+    tags.push(normalizeTagName(job.team));
+  }
+  
+  // Remove duplicates
+  return [...new Set(tags.filter(t => t && t.length > 0))];
 }
 
 /**

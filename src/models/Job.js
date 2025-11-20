@@ -18,8 +18,21 @@ const jobSchema = new mongoose.Schema({
     required: true,
     trim: true,
   },
+  team: {
+    type: String,
+    trim: true,
+  },
   seniority: {
     type: String,
+    trim: true,
+  },
+  location: {
+    type: String,
+    trim: true,
+  },
+  job_type: {
+    type: String,
+    enum: ['full-time', 'part-time', 'contract', 'internship', 'remote', 'hybrid', 'on-site'],
     trim: true,
   },
   budget_info: {
@@ -34,12 +47,10 @@ const jobSchema = new mongoose.Schema({
   tags: [{
     type: String,
   }],
-  apply_form_fields: [{
-    name: String,
-    type: String,
-    label: String,
-    required: Boolean,
-  }],
+  apply_form_fields: {
+    type: mongoose.Schema.Types.Mixed,
+    default: [],
+  },
   screening_questions: [{
     text: String,
     time_limit_sec: Number,
