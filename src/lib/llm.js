@@ -767,15 +767,26 @@ User's search query:
 Your task is to extract structured search criteria from the user's natural language query and create MongoDB query operators.
 
 IMPORTANT RULES:
-1. For skills/technologies, use the "tags" field with $in operator (match ANY of the tags)
-2. For text search in resume content, use "resumeText" field with $regex operator (case-insensitive)
+1. For skills/technologies, use the "tags" field with EXACT matching (case-insensitive)
+   - "java" should match "Java" but NOT "JavaScript"
+   - "react" should match "React" but NOT "React Native" (unless explicitly mentioned)
+   - Extract exact technology names as they appear in the query
+2. For text search in resume content, use "resumeText" field with word boundary matching
+   - "senior software engineer" should match the exact phrase, not just "software engineer"
+   - "java" should match "Java" but NOT "JavaScript" (use word boundaries)
+   - Extract exact phrases and keywords as they appear in the query
 3. For name search, use "name" field with $regex operator (case-insensitive)
 4. For email search, use "email" field with $regex operator (case-insensitive)
-5. For experience-related queries, search in "resumeText" using $regex
-6. For location-based queries, search in "resumeText" using $regex
+5. For experience-related queries, search in "resumeText" using word boundaries
+6. For location-based queries, search in "resumeText" using word boundaries
 7. For compensation, use "compensationExpectation" field with $regex
 8. For hired status, use "isHired" field with boolean value
 9. For date ranges, use "createdAt" or "updatedAt" with $gte or $lte operators
+
+CRITICAL: Avoid partial matches:
+- "java" should NOT match "javascript"
+- "senior software engineer" should NOT match "software engineer" alone
+- Extract exact terms and phrases as specified in the query
 
 MongoDB Query Operators you can use:
 - $in: for array fields like tags
@@ -787,16 +798,23 @@ MongoDB Query Operators you can use:
 Examples of what you should extract:
 
 Query: "Find React developers with Node.js experience"
-→ Extract: tags: ["React", "Node.js"]
+→ Extract: tags: ["React", "Node.js"] (exact matches, case-insensitive)
 
 Query: "Senior software engineers in Bangalore"
-→ Extract: resumeText search for "senior" AND "bangalore", tags: ["Software Engineer"]
+→ Extract: resumeKeywords: ["senior software engineer", "bangalore"], tags: ["Senior Software Engineer"]
+  Note: "senior software engineer" is a complete phrase, not just "software engineer"
 
 Query: "Python developers with 5+ years experience"
-→ Extract: tags: ["Python"], resumeText search for "5 years" or "5+ years"
+→ Extract: tags: ["Python"], resumeKeywords: ["5+ years", "5 years"]
 
 Query: "Full stack developers who know React and MongoDB"
 → Extract: tags: ["React", "MongoDB", "Full Stack"]
+
+Query: "Java developers"
+→ Extract: tags: ["Java"] (NOT "JavaScript" - exact match only)
+
+Query: "JavaScript developers"
+→ Extract: tags: ["JavaScript"] (NOT "Java" - exact match only)
 
 Query: "Candidates with GitHub profiles"
 → Extract: githubUrl exists (not null/empty)

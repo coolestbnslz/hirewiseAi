@@ -114,19 +114,51 @@ router.post('/search', async (req, res) => {
     const finalQuery = {};
     const skillOrConditions = []; // For tags and resume keywords (OR logic)
 
-    // Tags search (skills/technologies) - using $in operator for array matching
+    // Tags search (skills/technologies) - using exact case-insensitive matching
+    // Use $expr with $regexMatch to avoid partial matches (e.g., "java" matching "javascript")
     if (searchCriteria.tags && Array.isArray(searchCriteria.tags) && searchCriteria.tags.length > 0) {
-      skillOrConditions.push({ tags: { $in: searchCriteria.tags } });
-      console.log('[CandidateSearch] Adding tags filter:', searchCriteria.tags);
+      // For each tag, create an exact match condition
+      const tagConditions = searchCriteria.tags.map(tag => {
+        // Escape special regex characters
+        const escapedTag = tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        // Use $expr with $regexMatch for exact case-insensitive matching in array
+        // This ensures "java" matches "Java" but NOT "JavaScript"
+        return {
+          $expr: {
+            $anyElementTrue: {
+              $map: {
+                input: '$tags',
+                as: 'tag',
+                in: {
+                  $regexMatch: {
+                    input: '$$tag',
+                    regex: new RegExp(`^${escapedTag}$`, 'i'),
+                  },
+                },
+              },
+            },
+          },
+        };
+      });
+      skillOrConditions.push(...tagConditions);
+      console.log('[CandidateSearch] Adding tags filter (exact match):', searchCriteria.tags);
     }
 
     // Resume text search (keywords, experience, location)
-    // Add each keyword as a separate OR condition for more flexible matching
+    // Add word boundaries to avoid partial matches (e.g., "java" matching "javascript")
     if (searchCriteria.resumeKeywords && Array.isArray(searchCriteria.resumeKeywords) && searchCriteria.resumeKeywords.length > 0) {
       searchCriteria.resumeKeywords.forEach(keyword => {
-        skillOrConditions.push({ resumeText: { $regex: keyword, $options: 'i' } });
+        // Escape special regex characters
+        const escapedKeyword = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        // Use word boundaries for exact word matching (case-insensitive)
+        // For phrases like "senior software engineer", match the whole phrase
+        const isPhrase = keyword.trim().split(/\s+/).length > 1;
+        const regexPattern = isPhrase 
+          ? `\\b${escapedKeyword}\\b`  // Word boundaries for phrases
+          : `\\b${escapedKeyword}\\b`;  // Word boundaries for single words
+        skillOrConditions.push({ resumeText: { $regex: regexPattern, $options: 'i' } });
       });
-      console.log('[CandidateSearch] Adding resume keywords filter:', searchCriteria.resumeKeywords);
+      console.log('[CandidateSearch] Adding resume keywords filter (with word boundaries):', searchCriteria.resumeKeywords);
     }
 
     // If we have skill-based OR conditions (tags or resume keywords), add them

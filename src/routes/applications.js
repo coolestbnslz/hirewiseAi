@@ -185,8 +185,95 @@ router.post('/:jobId', upload.single('resume'), async (req, res) => {
       console.warn('[Application] Warning: No text extracted from resume file');
     }
 
-    // Find or create user
+    // Find or create user (minimal processing for immediate response)
     let user = await User.findOne({ email: applicant_email.toLowerCase() });
+    
+    // Update user with basic info immediately
+    if (!user) {
+      user = new User({
+        email: applicant_email.toLowerCase(),
+        name: applicant_name || 'Unknown',
+        phone: applicant_phone,
+        resumePath,
+        resumeText,
+        githubUrl,
+        portfolioUrl,
+        linkedinUrl,
+        compensationExpectation,
+      });
+    } else {
+      // Update user info
+      if (resumePath) user.resumePath = resumePath;
+      if (applicant_name) user.name = applicant_name;
+      if (applicant_phone) user.phone = applicant_phone;
+      if (applicant_email) user.email = applicant_email.toLowerCase();
+      if (resumeText) user.resumeText = resumeText;
+      if (githubUrl) user.githubUrl = githubUrl;
+      if (portfolioUrl) user.portfolioUrl = portfolioUrl;
+      if (linkedinUrl) user.linkedinUrl = linkedinUrl;
+      if (compensationExpectation) user.compensationExpectation = compensationExpectation;
+    }
+    await user.save();
+
+    // Check if there's an existing match for this job-candidate pair
+    const existingMatch = await JobCandidateMatch.findOne({
+      jobId: job._id,
+      userId: user._id,
+    });
+
+    // Create application immediately with minimal data
+    const application = new Application({
+      jobId: job._id,
+      userId: user._id,
+      resumePath,
+      resumeText,
+      consent_given: false,
+      level1_approved: false,
+      matchId: existingMatch?._id || null,
+      // Scores will be updated asynchronously
+      scores: {
+        resumeScore: 0,
+        githubPortfolioScore: 0,
+        compensationScore: 0,
+      },
+      unifiedScore: 0,
+    });
+    await application.save();
+
+    // Update match status to 'applied' and link to application
+    if (existingMatch) {
+      existingMatch.status = 'applied';
+      existingMatch.applicationId = application._id;
+      await existingMatch.save();
+    }
+
+    // Return immediate success response
+    res.status(201).json({
+      message: 'Application submitted successfully',
+      applicationId: application._id,
+      job: {
+        role: job.role,
+        company: job.company_name,
+      },
+    });
+
+    // Process all scoring asynchronously (don't await - fire and forget)
+    processApplicationScoring(application._id, job, user, resumeText, githubUrl, portfolioUrl, linkedinUrl).catch(error => {
+      console.error(`[Application] Error processing scoring for application ${application._id}:`, error);
+    });
+  } catch (error) {
+    console.error('Error processing application:', error);
+    res.status(500).json({ error: 'Internal server error', details: error.message });
+  }
+});
+
+/**
+ * Async function to process application scoring (resume, GitHub/Portfolio, compensation)
+ * This runs in the background after the application is created
+ */
+async function processApplicationScoring(applicationId, job, user, resumeText, githubUrl, portfolioUrl, linkedinUrl) {
+  try {
+    console.log(`[Application] Starting async scoring for application ${applicationId}`);
     
     // Parallel execution: Run all resume-related LLM calls and GitHub data fetch simultaneously
     const resumeProcessingPromises = [];
@@ -270,33 +357,35 @@ router.post('/:jobId', upload.single('resume'), async (req, res) => {
       console.warn('[Application] Skipping resume processing: no valid resume text extracted');
     }
     
-    // Note: GitHub data fetching will happen after resume parsing completes
-    // so we can extract GitHub URL from parsed resume if not provided
-    let githubDataFormatted = '';
-    
-    // Wait for all resume processing and GitHub data fetch to complete
+    // Wait for all resume processing to complete
     await Promise.all(resumeProcessingPromises);
     
-    // Extract GitHub and portfolio URLs from parsed resume if not provided in request
-    let finalGithubUrl = githubUrl;
-    let finalPortfolioUrl = portfolioUrl;
+    // Extract GitHub and portfolio URLs from parsed resume if not provided
+    let finalGithubUrl = githubUrl || user.githubUrl;
+    let finalPortfolioUrl = portfolioUrl || user.portfolioUrl;
+    let githubDataFormatted = '';
     
     if (parsedResumeData && parsedResumeData.contact) {
-      // Extract GitHub URL from parsed resume if not provided
       if (!finalGithubUrl && parsedResumeData.contact.github) {
         finalGithubUrl = parsedResumeData.contact.github;
         console.log(`[Application] Extracted GitHub URL from parsed resume: ${finalGithubUrl}`);
       }
-      
-      // Extract portfolio URL from parsed resume if not provided
       if (!finalPortfolioUrl && parsedResumeData.contact.portfolio) {
         finalPortfolioUrl = parsedResumeData.contact.portfolio;
         console.log(`[Application] Extracted portfolio URL from parsed resume: ${finalPortfolioUrl}`);
       }
     }
     
-    // Fetch GitHub data if we have a GitHub URL (from request or parsed resume)
-    if (finalGithubUrl && !githubDataFormatted) {
+    // Update user with extracted data
+    if (resumeTags.length > 0) user.tags = resumeTags;
+    if (parsedResumeData) user.parsedResume = parsedResumeData;
+    if (resumeSummary) user.resumeSummary = resumeSummary;
+    if (finalGithubUrl) user.githubUrl = finalGithubUrl;
+    if (finalPortfolioUrl) user.portfolioUrl = finalPortfolioUrl;
+    await user.save();
+    
+    // Fetch GitHub data if we have a GitHub URL
+    if (finalGithubUrl) {
       try {
         console.log(`[Application] Fetching GitHub data for: ${finalGithubUrl}`);
         const githubData = await fetchGitHubData(finalGithubUrl);
@@ -306,73 +395,6 @@ router.post('/:jobId', upload.single('resume'), async (req, res) => {
         console.error('[Application] Error fetching GitHub data:', error);
       }
     }
-    
-    // Calculate matched tags between resume and job (after tags are extracted)
-    const jobTags = job.tags || [];
-    const matchedTags = [];
-    const resumeTagsLower = resumeTags.map(t => t.toLowerCase());
-    
-    for (const jobTag of jobTags) {
-      const jobTagLower = jobTag.toLowerCase();
-      // Check for exact match or partial match
-      if (resumeTagsLower.includes(jobTagLower)) {
-        matchedTags.push(jobTag);
-      } else {
-        // Check for partial matches (e.g., "React" matches "React.js")
-        const matched = resumeTagsLower.find(rt => 
-          rt.includes(jobTagLower) || jobTagLower.includes(rt)
-        );
-        if (matched) {
-          const originalTag = resumeTags.find(t => t.toLowerCase() === matched);
-          if (originalTag && !matchedTags.includes(originalTag)) {
-            matchedTags.push(originalTag);
-          }
-        }
-      }
-    }
-    
-    console.log(`[Application] Found ${matchedTags.length} matched tags out of ${jobTags.length} job tags`);
-    
-    if (!user) {
-      user = new User({
-        email: applicant_email.toLowerCase(),
-        name: applicant_name || 'Unknown',
-        phone: applicant_phone,
-        resumePath,
-        resumeText,
-        githubUrl: finalGithubUrl, // Use extracted URL if available
-        portfolioUrl: finalPortfolioUrl, // Use extracted URL if available
-        linkedinUrl,
-        compensationExpectation,
-        tags: resumeTags, // Extracted using LLM
-        parsedResume: parsedResumeData, // Structured parsed resume data from LLM
-        resumeSummary,
-      });
-    } else {
-      // Update user info
-      if (resumePath) user.resumePath = resumePath;
-      if(applicant_name) user.name = applicant_name;
-      if(applicant_phone) user.phone = applicant_phone;
-      if(applicant_email) user.email = applicant_email.toLowerCase();
-      if (resumeText) {
-        user.resumeText = resumeText;
-        user.tags = resumeTags; // Update tags with LLM-based extraction
-      }
-      // Update parsed resume if new resume is uploaded
-      if (parsedResumeData) {
-        user.parsedResume = parsedResumeData;
-      }
-      // Update resume summary if generated
-      if (resumeSummary) {
-        user.resumeSummary = resumeSummary;
-      }
-      // Update URLs - prefer provided URLs, fallback to extracted from resume
-      if (finalGithubUrl) user.githubUrl = finalGithubUrl;
-      if (finalPortfolioUrl) user.portfolioUrl = finalPortfolioUrl;
-      if (linkedinUrl) user.linkedinUrl = linkedinUrl;
-      if (compensationExpectation) user.compensationExpectation = compensationExpectation;
-    }
-    await user.save();
 
     // Parallel execution: Run GitHub/Portfolio scoring, LinkedIn summary, and compensation analysis simultaneously
     const scoringPromises = [];
@@ -457,80 +479,40 @@ router.post('/:jobId', upload.single('resume'), async (req, res) => {
     };
     const unifiedScore = calculateUnifiedScore(scores);
 
-    // Check if there's an existing match for this job-candidate pair
-    const existingMatch = await JobCandidateMatch.findOne({
-      jobId: job._id,
-      userId: user._id,
-    });
+    // Update application with all scoring data
+    const application = await Application.findById(applicationId);
+    if (application) {
+      application.scores = scores;
+      application.unifiedScore = unifiedScore;
+      application.rawResumeLLM = resumeLLMResponse;
+      application.skillsMatched = skillsMatched;
+      application.skillsMissing = skillsMissing;
+      application.topReasons = topReasons;
+      application.recommendedAction = recommendedAction;
+      await application.save();
 
-    // Create application
-    const application = new Application({
-      jobId: job._id,
-      userId: user._id,
-      resumePath,
-      resumeText,
-      scores,
-      unifiedScore,
-      rawResumeLLM: resumeLLMResponse,
-      skillsMatched,
-      skillsMissing,
-      topReasons,
-      recommendedAction,
-      consent_given: false,
-      level1_approved: false,
-      matchId: existingMatch?._id || null,
-    });
-    await application.save();
+      // Auto-create screening if threshold met
+      if (unifiedScore >= job.settings.autoCreateScreeningThreshold) {
+        const existingScreening = await Screening.findOne({ applicationId: application._id });
+        if (!existingScreening) {
+          const screening = new Screening({
+            applicationId: application._id,
+            jobId: job._id,
+            screening_link: `https://hirewise.app/screening/${uuidv4()}`,
+          });
+          await screening.save();
+          console.log(`[Application] Auto-created screening for application ${applicationId}`);
+        }
+      }
 
-    // Update match status to 'applied' and link to application
-    if (existingMatch) {
-      existingMatch.status = 'applied';
-      existingMatch.applicationId = application._id;
-      await existingMatch.save();
+      console.log(`[Application] Completed async scoring for application ${applicationId}`);
+    } else {
+      console.error(`[Application] Application ${applicationId} not found for scoring update`);
     }
-
-    // Auto-create screening if threshold met
-    let screening = null;
-    if (unifiedScore >= job.settings.autoCreateScreeningThreshold) {
-      screening = new Screening({
-        applicationId: application._id,
-        jobId: job._id,
-        screening_link: `https://hirewise.app/screening/${uuidv4()}`,
-      });
-      await screening.save();
-    }
-
-    // Candidate-facing response (no scores shown)
-    res.status(201).json({
-      message: 'Application submitted successfully',
-      applicationId: application._id,
-      screeningId: screening?._id || null,
-      resume: {
-        summary: resumeSummary,
-        tags: resumeTags,
-        matchedTags: matchedTags,
-        totalTags: resumeTags.length,
-        matchedCount: matchedTags.length,
-        matchPercentage: jobTags.length > 0 ? Math.round((matchedTags.length / jobTags.length) * 100) : 0,
-      },
-      githubPortfolio: {
-        summary: githubPortfolioSummary,
-      },
-      linkedin: {
-        summary: linkedinSummary,
-      },
-      job: {
-        role: job.role,
-        company: job.company_name,
-        tags: jobTags,
-        totalTags: jobTags.length,
-      },
-    });
   } catch (error) {
-    console.error('Error processing application:', error);
-    res.status(500).json({ error: 'Internal server error', details: error.message });
+    console.error(`[Application] Error in async scoring for application ${applicationId}:`, error);
   }
-});
+}
 
 // POST /api/applications/:id/consent - Mark consent given
 router.post('/:id/consent', async (req, res) => {
