@@ -8,6 +8,7 @@ import applicationsRouter from './routes/applications.js';
 import screeningsRouter from './routes/screenings.js';
 import usersRouter from './routes/users.js';
 import debugRouter from './routes/debug.js';
+import analysisRouter from './routes/analysis.js';
 
 dotenv.config();
 
@@ -25,6 +26,7 @@ app.use('/api/apply', applicationsRouter);
 app.use('/api/applications', applicationsRouter);
 app.use('/api/screenings', screeningsRouter);
 app.use('/api/users', usersRouter);
+app.use('/api/analysis', analysisRouter);
 app.use('/debug', debugRouter);
 
 // Health check

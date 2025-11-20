@@ -277,10 +277,10 @@ router.post('/:jobId', upload.single('resume'), async (req, res) => {
       await screening.save();
     }
 
+    // Candidate-facing response (no scores shown)
     res.status(201).json({
+      message: 'Application submitted successfully',
       applicationId: application._id,
-      unifiedScore,
-      scores,
       screeningId: screening?._id || null,
       resume: {
         summary: resumeSummary,
@@ -292,12 +292,13 @@ router.post('/:jobId', upload.single('resume'), async (req, res) => {
       },
       githubPortfolio: {
         summary: githubPortfolioSummary,
-        score: githubPortfolioScore,
       },
       linkedin: {
         summary: linkedinSummary,
       },
       job: {
+        role: job.role,
+        company: job.company_name,
         tags: jobTags,
         totalTags: jobTags.length,
       },

@@ -495,6 +495,61 @@ Return ONLY valid JSON, no additional text.`;
 }
 
 /**
+ * Build prompt for checking criteria fulfillment in text
+ */
+function buildCriteriaCheckPrompt(payload) {
+  const { text } = payload;
+
+  return `You are an expert HR analyst checking if specific criteria are fulfilled in a given text.
+
+Text to analyze:
+${text}
+
+Check if the following 5 criteria are present in the text:
+1. **Location**: Does the text mention a specific location, city, or geographic area? (e.g., "Noida", "Delhi", "Remote", "Bangalore", "Mumbai")
+2. **Job Title**: Does the text mention a specific job title or role? (e.g., "Software Engineer", "Product Manager", "Data Scientist", "Full Stack Developer")
+3. **Years of Experience**: Does the text mention years of experience, experience level, or seniority? (e.g., "2+ years", "5 years experience", "Senior", "Mid-level", "Entry level")
+4. **Industry**: Does the text mention a specific industry, domain, or sector? (e.g., "Fintech", "E-commerce", "Healthcare", "Banking", "SaaS")
+5. **Skills**: Does the text mention specific technical skills, technologies, or competencies? (e.g., "React", "Python", "AWS", "Machine Learning", "Node.js", "MongoDB")
+
+IMPORTANT:
+- Be strict: Only mark containsCriteria as true if the criterion is EXPLICITLY mentioned in the text
+- Do NOT infer or assume - if it's not clearly stated, mark it as false
+- For "Location": Accept cities, states, countries, or location types (remote, on-site, hybrid)
+- For "Job Title": Accept role names, position titles, or job designations
+- For "Years of Experience": Accept explicit numbers, ranges, or experience level descriptors
+- For "Industry": Accept industry names, sectors, or domain mentions
+- For "Skills": Accept technology names, programming languages, tools, frameworks, or specific competencies
+
+Return a JSON array with exactly this structure:
+[
+  {
+    "label": "Location",
+    "containsCriteria": true or false
+  },
+  {
+    "label": "Job Title",
+    "containsCriteria": true or false
+  },
+  {
+    "label": "Years of Experience",
+    "containsCriteria": true or false
+  },
+  {
+    "label": "Industry",
+    "containsCriteria": true or false
+  },
+  {
+    "label": "Skills",
+    "containsCriteria": true or false
+  }
+]
+
+Return ONLY valid JSON array, no additional text.`;
+
+}
+
+/**
  * Build prompt for extracting tags from job description
  */
 function buildTagExtractionPrompt(payload) {
@@ -851,6 +906,11 @@ export async function callLLM(promptName, payload) {
     case 'LINKEDIN_SUMMARY':
       prompt = buildLinkedInSummaryPrompt(payload);
       temperature = 0.6; // Slightly creative for summary generation
+      break;
+
+    case 'CRITERIA_CHECK':
+      prompt = buildCriteriaCheckPrompt(payload);
+      temperature = 0.3; // Lower temperature for consistent, objective checking
       break;
 
     default:
