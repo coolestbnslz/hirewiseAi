@@ -2,6 +2,7 @@ import express from 'express';
 import User from '../models/User.js';
 import { callLLM } from '../lib/llm.js';
 import { parseJsonSafely } from '../lib/parseJsonSafely.js';
+import { fetchGitHubData, formatGitHubDataForLLM } from '../lib/github.js';
 
 const router = express.Router();
 
@@ -210,35 +211,129 @@ router.post('/search', async (req, res) => {
         let skillsMissing = [];
         let topReasons = [];
         let recommendedAction = null;
+        let githubPortfolioScore = 0;
+        let githubPortfolioSummary = '';
+        let compensationScore = 0;
+        let compensationAnalysis = '';
 
-        // Only score if resume text is available
+        // Extract GitHub URL from parsedResume if not provided directly
+        let finalGithubUrl = user.githubUrl;
+        let finalPortfolioUrl = user.portfolioUrl;
+        
+        if (!finalGithubUrl && user.parsedResume && user.parsedResume.contact && user.parsedResume.contact.github) {
+          finalGithubUrl = user.parsedResume.contact.github;
+          console.log(`[CandidateSearch] Extracted GitHub URL from parsed resume for ${user.name}: ${finalGithubUrl}`);
+        }
+        
+        if (!finalPortfolioUrl && user.parsedResume && user.parsedResume.contact && user.parsedResume.contact.portfolio) {
+          finalPortfolioUrl = user.parsedResume.contact.portfolio;
+          console.log(`[CandidateSearch] Extracted portfolio URL from parsed resume for ${user.name}: ${finalPortfolioUrl}`);
+        }
+
+        // Parallel scoring: Resume scoring, GitHub/Portfolio scoring, Compensation analysis
+        const scoringPromises = [];
+
+        // Resume scoring
         if (user.resumeText && user.resumeText.trim().length > 0) {
-          try {
-            console.log(`[CandidateSearch] Scoring candidate: ${user.name} (${user._id})`);
-            const scoringResponse = await callLLM('CANDIDATE_SEARCH_SCORING', {
+          scoringPromises.push(
+            callLLM('CANDIDATE_SEARCH_SCORING', {
               resumeText: user.resumeText,
               searchCriteria,
               searchQuery: query,
-            });
-            const scoringParsed = parseJsonSafely(scoringResponse);
-            
-            if (scoringParsed.ok) {
-              matchScore = scoringParsed.json.match_score || 0;
-              skillsMatched = scoringParsed.json.skills_matched || [];
-              skillsMissing = scoringParsed.json.skills_missing || [];
-              topReasons = scoringParsed.json.top_reasons || [];
-              recommendedAction = scoringParsed.json.recommended_action || null;
-              console.log(`[CandidateSearch] Scored candidate ${user.name}: ${matchScore}`);
-            } else {
-              console.error(`[CandidateSearch] Failed to parse scoring for ${user.name}:`, scoringParsed.error);
-            }
-          } catch (error) {
-            console.error(`[CandidateSearch] Error scoring candidate ${user.name}:`, error);
-            // Continue without score if scoring fails
-          }
+            })
+              .then(scoringResponse => {
+                const scoringParsed = parseJsonSafely(scoringResponse);
+                if (scoringParsed.ok) {
+                  matchScore = scoringParsed.json.match_score || 0;
+                  skillsMatched = scoringParsed.json.skills_matched || [];
+                  skillsMissing = scoringParsed.json.skills_missing || [];
+                  topReasons = scoringParsed.json.top_reasons || [];
+                  recommendedAction = scoringParsed.json.recommended_action || null;
+                  console.log(`[CandidateSearch] Scored candidate ${user.name}: ${matchScore}`);
+                } else {
+                  console.error(`[CandidateSearch] Failed to parse scoring for ${user.name}:`, scoringParsed.error);
+                }
+              })
+              .catch(error => {
+                console.error(`[CandidateSearch] Error scoring candidate ${user.name}:`, error);
+              })
+          );
         } else {
-          console.log(`[CandidateSearch] Skipping score for ${user.name}: no resume text`);
+          console.log(`[CandidateSearch] Skipping resume score for ${user.name}: no resume text`);
         }
+
+        // GitHub/Portfolio scoring
+        let githubDataFormatted = '';
+        if (finalGithubUrl) {
+          // Fetch GitHub data first
+          try {
+            const githubData = await fetchGitHubData(finalGithubUrl);
+            githubDataFormatted = formatGitHubDataForLLM(githubData);
+            console.log(`[CandidateSearch] Fetched GitHub data for ${user.name}: ${githubData.error ? 'Error' : `${githubData.repositories?.length || 0} repositories`}`);
+          } catch (error) {
+            console.error(`[CandidateSearch] Error fetching GitHub data for ${user.name}:`, error);
+          }
+        }
+
+        if (githubDataFormatted || finalPortfolioUrl) {
+          // Create a mock job object for GitHub/Portfolio scoring (using search criteria)
+          const mockJob = {
+            role: searchCriteria.role || 'Position',
+            company_name: 'Paytm',
+            must_have_skills: searchCriteria.tags || [],
+            nice_to_have: [],
+            enhanced_jd: query,
+          };
+
+          scoringPromises.push(
+            callLLM('GITHUB_PORTFOLIO_SCORING', {
+              githubData: githubDataFormatted,
+              portfolioUrl: finalPortfolioUrl,
+              job: mockJob,
+            })
+              .then(githubLLMResponse => {
+                const githubParsed = parseJsonSafely(githubLLMResponse);
+                if (githubParsed.ok) {
+                  githubPortfolioScore = githubParsed.json.score || 0;
+                  githubPortfolioSummary = githubParsed.json.summary || '';
+                  console.log(`[CandidateSearch] GitHub/Portfolio scored for ${user.name}: ${githubPortfolioScore}`);
+                } else {
+                  console.error(`[CandidateSearch] Failed to parse GitHub/Portfolio response for ${user.name}:`, githubParsed.error);
+                }
+              })
+              .catch(error => {
+                console.error(`[CandidateSearch] Error processing GitHub/Portfolio for ${user.name}:`, error);
+              })
+          );
+        }
+
+        // Compensation analysis (if compensation expectation and budget info exist)
+        // Check for budget info in search criteria (could be budgetInfo, budget, or compensationQuery)
+        const budgetInfo = searchCriteria.budgetInfo || searchCriteria.budget || searchCriteria.compensationQuery;
+        if (user.compensationExpectation && budgetInfo) {
+          scoringPromises.push(
+            callLLM('COMPENSATION_ANALYSIS', {
+              compensationExpectation: user.compensationExpectation,
+              budget_info: budgetInfo,
+            })
+              .then(compLLMResponse => {
+                const compParsed = parseJsonSafely(compLLMResponse);
+                if (compParsed.ok) {
+                  compensationScore = compParsed.json.score || 0;
+                  compensationAnalysis = compParsed.json.analysis || '';
+                  console.log(`[CandidateSearch] Compensation analyzed for ${user.name}: ${compensationScore}`);
+                } else {
+                  console.error(`[CandidateSearch] Failed to parse compensation response for ${user.name}:`, compParsed.error);
+                }
+              })
+              .catch(error => {
+                console.error(`[CandidateSearch] Error analyzing compensation for ${user.name}:`, error);
+              })
+          );
+        }
+
+        // Wait for all scoring operations to complete
+        await Promise.all(scoringPromises);
 
         return {
           id: user._id,
@@ -246,8 +341,8 @@ router.post('/search', async (req, res) => {
           email: user.email,
           phone: user.phone,
           tags: user.tags,
-          githubUrl: user.githubUrl,
-          portfolioUrl: user.portfolioUrl,
+          githubUrl: finalGithubUrl || user.githubUrl,
+          portfolioUrl: finalPortfolioUrl || user.portfolioUrl,
           linkedinUrl: user.linkedinUrl,
           compensationExpectation: user.compensationExpectation,
           isHired: user.isHired,
@@ -262,6 +357,10 @@ router.post('/search', async (req, res) => {
           skillsMissing,
           topReasons,
           recommendedAction,
+          githubPortfolioScore,
+          githubPortfolioSummary,
+          compensationScore,
+          compensationAnalysis,
         };
       })
     );
