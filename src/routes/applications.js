@@ -15,6 +15,117 @@ import { fetchGitHubData, formatGitHubDataForLLM } from '../lib/github.js';
 
 const router = express.Router();
 
+// GET /api/applications/job/:jobId - Get all applications for a specific job
+router.get('/job/:jobId', async (req, res) => {
+  try {
+    const { jobId } = req.params;
+    const { 
+      status, 
+      minScore, 
+      sortBy = 'createdAt', 
+      sortOrder = 'desc',
+      limit = 100,
+      page = 1 
+    } = req.query;
+
+    // Validate job exists
+    const job = await Job.findById(jobId);
+    if (!job) {
+      return res.status(404).json({ error: 'Job not found' });
+    }
+
+    // Build query
+    const query = { jobId };
+
+    // Filter by approval status if provided
+    if (status === 'approved') {
+      query.level1_approved = true;
+    } else if (status === 'pending') {
+      query.level1_approved = false;
+    }
+
+    // Filter by minimum score if provided
+    if (minScore) {
+      query.unifiedScore = { $gte: parseFloat(minScore) };
+    }
+
+    // Build sort object
+    const sort = {};
+    if (sortBy === 'score') {
+      sort.unifiedScore = sortOrder === 'asc' ? 1 : -1;
+    } else if (sortBy === 'createdAt') {
+      sort.createdAt = sortOrder === 'asc' ? 1 : -1;
+    } else if (sortBy === 'updatedAt') {
+      sort.updatedAt = sortOrder === 'asc' ? 1 : -1;
+    } else {
+      sort.createdAt = -1; // Default sort
+    }
+
+    // Calculate pagination
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    // Fetch applications with populated user data
+    const applications = await Application.find(query)
+      .populate('userId', 'name email phone githubUrl portfolioUrl linkedinUrl compensationExpectation tags')
+      .populate('matchId', 'matchScore status')
+      .sort(sort)
+      .limit(parseInt(limit))
+      .skip(skip)
+      .lean();
+
+    // Get total count for pagination
+    const total = await Application.countDocuments(query);
+
+    // Format response
+    const formattedApplications = applications.map(app => ({
+      applicationId: app._id,
+      userId: app.userId._id,
+      candidate: {
+        name: app.userId.name,
+        email: app.userId.email,
+        phone: app.userId.phone,
+        githubUrl: app.userId.githubUrl,
+        portfolioUrl: app.userId.portfolioUrl,
+        linkedinUrl: app.userId.linkedinUrl,
+        compensationExpectation: app.userId.compensationExpectation,
+        tags: app.userId.tags || [],
+      },
+      scores: {
+        resumeScore: app.scores?.resumeScore || null,
+        githubPortfolioScore: app.scores?.githubPortfolioScore || null,
+        compensationScore: app.scores?.compensationScore || null,
+        unifiedScore: app.unifiedScore || null,
+        compensationAnalysis: app.scores?.compensationAnalysis || null,
+      },
+      status: {
+        consentGiven: app.consent_given,
+        level1Approved: app.level1_approved,
+      },
+      matchInfo: app.matchId ? {
+        matchId: app.matchId._id,
+        matchScore: app.matchId.matchScore,
+        status: app.matchId.status,
+      } : null,
+      createdAt: app.createdAt,
+      updatedAt: app.updatedAt,
+    }));
+
+    res.json({
+      jobId: job._id,
+      jobRole: job.role,
+      jobCompany: job.company_name,
+      totalApplications: total,
+      page: parseInt(page),
+      limit: parseInt(limit),
+      totalPages: Math.ceil(total / parseInt(limit)),
+      applications: formattedApplications,
+    });
+  } catch (error) {
+    console.error('Error fetching applications:', error);
+    res.status(500).json({ error: 'Internal server error', details: error.message });
+  }
+});
+
 // Calculate unified score from individual scores
 function calculateUnifiedScore(scores) {
   const weights = {
