@@ -48,6 +48,13 @@ const userSchema = new mongoose.Schema({
   hiredAt: {
     type: Date,
   },
+  parsedResume: {
+    type: mongoose.Schema.Types.Mixed,
+    default: null,
+  },
+  resumeSummary: {
+    type: String,
+  },
 }, {
   timestamps: true,
 });

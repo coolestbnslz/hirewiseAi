@@ -89,7 +89,13 @@ router.get('/job/:jobId', async (req, res) => {
         linkedinUrl: app.userId.linkedinUrl,
         compensationExpectation: app.userId.compensationExpectation,
         tags: app.userId.tags || [],
+        parsedResume: app.userId.parsedResume || null,
+        resumeSummary: app.userId.resumeSummary || null,
       },
+      skillsMatched: app.skillsMatched || [],
+      skillsMissing: app.skillsMissing || [],
+      topReasons: app.topReasons || [],
+      recommendedAction: app.recommendedAction || null,
       scores: {
         resumeScore: app.scores?.resumeScore || null,
         githubPortfolioScore: app.scores?.githubPortfolioScore || null,
@@ -239,6 +245,25 @@ router.post('/:jobId', upload.single('resume'), async (req, res) => {
     
     console.log(`[Application] Found ${matchedTags.length} matched tags out of ${jobTags.length} job tags`);
     
+    // Parse resume using LLM to extract structured data
+    let parsedResumeData = null;
+    if (resumeText && resumeText.trim().length > 0) {
+      try {
+        console.log('[Application] Parsing resume with LLM...');
+        const parseResponse = await callLLM('RESUME_PARSER', { resumeText });
+        const parsed = parseJsonSafely(parseResponse);
+        if (parsed.ok) {
+          parsedResumeData = parsed.json;
+          console.log('[Application] Resume parsed successfully with LLM');
+        } else {
+          console.error('[Application] Failed to parse LLM response for resume parsing:', parsed.error);
+        }
+      } catch (error) {
+        console.error('[Application] Error parsing resume with LLM:', error);
+        // Continue without parsed data if parsing fails
+      }
+    }
+    
     if (!user) {
       user = new User({
         email: applicant_email.toLowerCase(),
@@ -251,6 +276,8 @@ router.post('/:jobId', upload.single('resume'), async (req, res) => {
         linkedinUrl,
         compensationExpectation,
         tags: resumeTags, // Extracted using LLM
+        parsedResume: parsedResumeData, // Structured parsed resume data from LLM
+        resumeSummary,
       });
     } else {
       // Update user info
@@ -260,8 +287,15 @@ router.post('/:jobId', upload.single('resume'), async (req, res) => {
       if(applicant_email) user.email = applicant_email.toLowerCase();
       if (resumeText) {
         user.resumeText = resumeText;
-        user.tags = resumeTags; // Update tags with embeddings-based extraction
-        
+        user.tags = resumeTags; // Update tags with LLM-based extraction
+      }
+      // Update parsed resume if new resume is uploaded
+      if (parsedResumeData) {
+        user.parsedResume = parsedResumeData;
+      }
+      // Update resume summary if generated
+      if (resumeSummary) {
+        user.resumeSummary = resumeSummary;
       }
       if (githubUrl) user.githubUrl = githubUrl;
       if (portfolioUrl) user.portfolioUrl = portfolioUrl;
@@ -277,6 +311,12 @@ router.post('/:jobId', upload.single('resume'), async (req, res) => {
     });
     const resumeParsed = parseJsonSafely(resumeLLMResponse);
     const resumeScore = resumeParsed.ok ? resumeParsed.json.match_score : 0;
+    
+    // Extract resume scoring details
+    const skillsMatched = resumeParsed.ok ? (resumeParsed.json.skills_matched || []) : [];
+    const skillsMissing = resumeParsed.ok ? (resumeParsed.json.skills_missing || []) : [];
+    const topReasons = resumeParsed.ok ? (resumeParsed.json.top_reasons || []) : [];
+    const recommendedAction = resumeParsed.ok ? (resumeParsed.json.recommended_action || null) : null;
 
     // Score GitHub/Portfolio and get summary
     let githubPortfolioScore = 0;
@@ -368,6 +408,11 @@ router.post('/:jobId', upload.single('resume'), async (req, res) => {
       scores,
       unifiedScore,
       rawResumeLLM: resumeLLMResponse,
+      skillsMatched,
+      skillsMissing,
+      topReasons,
+      recommendedAction,
+      resumeSummary,
       consent_given: false,
       level1_approved: false,
       matchId: existingMatch?._id || null,

@@ -45,6 +45,23 @@ const applicationSchema = new mongoose.Schema({
   rawResumeLLM: {
     type: String,
   },
+  // Extracted resume scoring details
+  skillsMatched: [{
+    type: String,
+  }],
+  skillsMissing: [{
+    type: String,
+  }],
+  topReasons: [{
+    type: String,
+  }],
+  recommendedAction: {
+    type: String,
+    enum: ['yes', 'maybe', 'no'],
+  },
+  resumeSummary: {
+    type: String,
+  },
   consent_given: {
     type: Boolean,
     default: false,

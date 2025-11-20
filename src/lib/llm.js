@@ -499,6 +499,104 @@ Return ONLY valid JSON, no additional text.`;
 }
 
 /**
+ * Build prompt for parsing resume into structured JSON format
+ */
+function buildResumeParserPrompt(payload) {
+  const { resumeText } = payload;
+
+  // Truncate resume text if too long (keep more context for parsing)
+  const maxLength = 15000;
+  const truncatedResume = resumeText.length > maxLength 
+    ? resumeText.substring(0, maxLength) + '...' 
+    : resumeText;
+
+  return `You are an expert HR analyst parsing a resume and extracting structured information.
+
+Resume Text:
+${truncatedResume}
+
+Extract all information from the resume and structure it into a JSON object with the following exact format:
+
+{
+  "name": "Full name of the candidate",
+  "contact": {
+    "email": "Email address if mentioned",
+    "phone": "Phone number if mentioned",
+    "linkedin": "LinkedIn URL if mentioned",
+    "github": "GitHub URL if mentioned",
+    "portfolio": "Portfolio/website URL if mentioned"
+  },
+  "profile": "Professional summary, profile, or objective (2-3 sentences)",
+  "education": [
+    {
+      "institution": "University/College name",
+      "degree": "Degree type (e.g., B.Tech, M.Tech, B.Sc, M.Sc, MBA)",
+      "field": "Field of study (e.g., Computer Science, Engineering)",
+      "duration": "Duration/date range (e.g., Aug 2018 – May 2022)",
+      "gpa": "GPA or percentage if mentioned",
+      "location": "Location of institution if mentioned"
+    }
+  ],
+  "experience": [
+    {
+      "title": "Job title/position",
+      "company": "Company name",
+      "duration": "Duration/date range (e.g., May 2021 – Jul 2021)",
+      "location": "Location if mentioned (e.g., Remote, Noida, Bangalore)",
+      "responsibilities": [
+        "Bullet point 1",
+        "Bullet point 2",
+        "Bullet point 3"
+      ]
+    }
+  ],
+  "projects": [
+    {
+      "name": "Project name",
+      "technologies": ["Technology1", "Technology2"],
+      "duration": "Duration if mentioned",
+      "description": [
+        "Description point 1",
+        "Description point 2"
+      ],
+      "links": ["URL1", "URL2"]
+    }
+  ],
+  "skills": {
+    "languages": ["JavaScript", "Python", "C++"],
+    "frameworks": ["React", "Express", "Next.js"],
+    "databases": ["MongoDB", "MySQL"],
+    "tools": ["Git", "Docker", "Jenkins"],
+    "libraries": ["Pandas", "NumPy"],
+    "other": ["REST APIs", "Agile", "CI/CD"]
+  },
+  "achievements": [
+    "Achievement 1",
+    "Achievement 2"
+  ],
+  "languages": ["English", "Hindi", "Other languages if mentioned"],
+  "interests": ["Interest1", "Interest2"]
+}
+
+IMPORTANT RULES:
+- Extract ONLY information that is explicitly mentioned in the resume text
+- Do NOT add information that is not present in the resume
+- If a field is not mentioned, use an empty string for strings, empty array [] for arrays, or empty object {} for objects
+- For contact fields: Only include if explicitly mentioned in the resume
+- For education: Extract all education entries mentioned
+- For experience: Extract all work experience entries with their responsibilities
+- For projects: Extract all projects mentioned with their technologies and descriptions
+- For skills: Categorize skills into languages, frameworks, databases, tools, libraries, and other
+- For achievements: Include awards, certifications, honors, publications, etc.
+- For languages: Include spoken languages if mentioned
+- For interests: Include hobbies or interests if mentioned
+- Keep the exact JSON structure as shown above
+
+Return ONLY valid JSON, no additional text or markdown formatting.`;
+
+}
+
+/**
  * Build prompt for checking criteria fulfillment in text
  */
 function buildCriteriaCheckPrompt(payload) {
@@ -1021,6 +1119,12 @@ export async function callLLM(promptName, payload) {
     case 'CRITERIA_CHECK':
       prompt = buildCriteriaCheckPrompt(payload);
       temperature = 0.3; // Lower temperature for consistent, objective checking
+      break;
+
+    case 'RESUME_PARSER':
+      prompt = buildResumeParserPrompt(payload);
+      systemPrompt += ' Extract all information accurately and structure it precisely.';
+      temperature = 0.3; // Lower temperature for accurate, consistent parsing
       break;
 
     case 'CANDIDATE_SEARCH':

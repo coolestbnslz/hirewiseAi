@@ -222,6 +222,8 @@ router.post('/search', async (req, res) => {
         hiredAt: user.hiredAt,
         createdAt: user.createdAt,
         updatedAt: user.updatedAt,
+        resumeSummary: user.resumeSummary,
+        parsedResume: user.parsedResume,
       })),
     });
   } catch (error) {
