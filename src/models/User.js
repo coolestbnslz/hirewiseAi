@@ -55,6 +55,22 @@ const userSchema = new mongoose.Schema({
   resumeSummary: {
     type: String,
   },
+  currentTenure: {
+    type: String, // e.g., "2 years 3 months", "1.5 years"
+  },
+  totalExperience: {
+    type: String, // e.g., "5 years", "3.5 years"
+  },
+  isRecentSwitcher: {
+    type: Boolean,
+    default: false,
+  },
+  currentCompany: {
+    type: String,
+  },
+  lastJobSwitchDate: {
+    type: String, // YYYY-MM format
+  },
 }, {
   timestamps: true,
 });

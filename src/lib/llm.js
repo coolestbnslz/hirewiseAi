@@ -663,7 +663,12 @@ Extract all information from the resume and structure it into a JSON object with
     "Achievement 2"
   ],
   "languages": ["English", "Hindi", "Other languages if mentioned"],
-  "interests": ["Interest1", "Interest2"]
+  "interests": ["Interest1", "Interest2"],
+  "currentTenure": "Duration at current job (e.g., '2 years 3 months', '1.5 years', '18 months') or null if not currently employed",
+  "totalExperience": "Total years of professional experience (e.g., '5 years', '3.5 years', '2 years 6 months') calculated from all work experience",
+  "isRecentSwitcher": true or false, // true if they changed jobs in the last 6 months, false otherwise
+  "currentCompany": "Name of current company if currently employed, or null",
+  "lastJobSwitchDate": "Date of last job change (YYYY-MM format, e.g., '2024-01') or null if never switched or not determinable"
 }
 
 IMPORTANT RULES:
@@ -678,6 +683,11 @@ IMPORTANT RULES:
 - For achievements: Include awards, certifications, honors, publications, etc.
 - For languages: Include spoken languages if mentioned
 - For interests: Include hobbies or interests if mentioned
+- For currentTenure: Calculate from the most recent/current job's duration. If the most recent job has an end date, they are not currently employed (use null)
+- For totalExperience: Sum up all work experience durations. Convert months to years (e.g., 18 months = 1.5 years)
+- For isRecentSwitcher: Set to true if the most recent job change happened within the last 6 months from today's date. Compare the start date of the current/most recent job with today
+- For currentCompany: Use the company name from the most recent job if it doesn't have an end date, otherwise null
+- For lastJobSwitchDate: Use the start date of the most recent job (YYYY-MM format)
 - Keep the exact JSON structure as shown above
 
 Return ONLY valid JSON, no additional text or markdown formatting.`;

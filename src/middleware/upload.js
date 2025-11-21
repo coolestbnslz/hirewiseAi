@@ -19,3 +19,21 @@ export const upload = multer({
   },
 });
 
+// Multer configuration for multiple files (up to 10)
+export const uploadMultiple = multer({
+  storage,
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB limit per file
+    files: 10, // Maximum 10 files
+  },
+  fileFilter: (req, file, cb) => {
+    // Accept PDF and text files
+    const allowedMimes = ['application/pdf', 'text/plain', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
+    if (allowedMimes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Invalid file type. Only PDF and text files are allowed.'), false);
+    }
+  },
+});
+
