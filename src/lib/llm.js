@@ -921,6 +921,18 @@ MongoDB Query Operators you can use:
 - $and, $or: for combining multiple conditions
 - $eq: for exact matches
 
+IMPORTANT RULES FOR EXTRACTION:
+1. **Job Titles/Roles** should ALWAYS go in tags (e.g., "HR Manager", "Software Engineer", "Data Scientist")
+2. **Skills/Technologies** should ALWAYS go in tags (e.g., "Python", "React", "Machine Learning", "Tech Recruitment")
+3. **Locations** should go in resumeKeywords (e.g., "Delhi", "Bangalore", "Mumbai")
+4. **Experience descriptors** should go in resumeKeywords ONLY if specific (e.g., "5 years", "10+ years")
+5. **Industry/Domain** should go in tags (e.g., "Fintech", "Recruitment", "Healthcare")
+6. Be STRICT: Only extract what is EXPLICITLY mentioned in the query
+7. Don't add generic terms - be specific to what user is searching for
+8. **CRITICAL**: Do NOT extract generic words like "hr", "tech", "experience" as resumeKeywords
+9. **CRITICAL**: Do NOT extract long phrases - break them down into tags
+10. resumeKeywords should be MINIMAL - typically just location and specific experience numbers
+
 Examples of what you should extract:
 
 Query: "Find React developers with Node.js experience"
@@ -941,6 +953,10 @@ Query: "Java developers"
 
 Query: "JavaScript developers"
 → Extract: tags: ["JavaScript"] (NOT "Java" - exact match only)
+
+Query: "HR Managers in Delhi with experience in tech recruitment"
+→ Extract: tags: ["HR Manager", "Tech Recruitment", "Recruitment"], resumeKeywords: ["delhi", "NCR","gurugram/gurgaon","noida"]
+  Note: "hr" and "experience in tech recruitment" are NOT added to resumeKeywords (too generic/redundant)
 
 Query: "Candidates with GitHub profiles"
 → Extract: githubUrl exists (not null/empty)
