@@ -774,18 +774,38 @@ router.post('/:id/approve-level1', async (req, res) => {
 router.post('/:id/schedule-call', async (req, res) => {
   try {
     const { id } = req.params;
-    const { start_time } = req.body; // Optional: "YYYY-MM-DD HH:MM:SS -HH:MM" format
+    const { start_time, userId } = req.body; // Optional: userId if no application, start_time for scheduling
 
-    const application = await Application.findById(id)
-      .populate('jobId')
-      .populate('userId');
-    
-    if (!application) {
-      return res.status(404).json({ error: 'Application not found' });
+    // Determine if id is applicationId or userId, or use userId from body
+    const targetUserId = userId || id;
+    let application = null;
+    let user = null;
+    let job = null;
+    let isUserOnlyCall = false;
+
+    // Try to find application first
+    try {
+      application = await Application.findById(id)
+        .populate('jobId')
+        .populate('userId');
+    } catch (err) {
+      // If id is not a valid ObjectId for Application, treat as userId
+      console.log(`[Application] ID ${id} not found as application, trying as userId`);
     }
 
-    const job = application.jobId;
-    const user = application.userId;
+    if (application && application.userId) {
+      // Application found - use application context
+      job = application.jobId;
+      user = application.userId;
+      isUserOnlyCall = false;
+    } else {
+      // No application found - treat as user-only call (from AI search)
+      user = await User.findById(targetUserId);
+      if (!user) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+      isUserOnlyCall = true;
+    }
 
     if (!user || !user.phone) {
       return res.status(400).json({ error: 'Candidate phone number not found' });
@@ -803,54 +823,99 @@ router.post('/:id/schedule-call', async (req, res) => {
       });
     }
 
-    // Get or generate screening questions (technical and behavioral only)
-    // Use questions from Application if already stored, otherwise generate
+    // Get or generate screening questions
     let questions = [];
     
-    if (application.phoneInterview && application.phoneInterview.questions && application.phoneInterview.questions.length > 0) {
-      questions = application.phoneInterview.questions;
-    } else {
-      // Generate questions on the spot
-      const questionsResponse = await callLLM('SCREENING_QUESTIONS', {
-        job,
-        candidateInfo: {
-          name: user.name,
-          skills: application.skillsMatched || user.tags || [],
-        },
-      });
-      const parsed = parseJsonSafely(questionsResponse);
-      questions = parsed.ok ? parsed.json.screening_questions : [];
-    }
+    if (isUserOnlyCall) {
+      // User-only call: Generate questions based on resume only (no job context)
+      // Check if user has stored questions from a previous call
+      if (user.phoneInterviewSummaries && user.phoneInterviewSummaries.length > 0) {
+        const lastCall = user.phoneInterviewSummaries[user.phoneInterviewSummaries.length - 1];
+        if (lastCall.questions && lastCall.questions.length > 0) {
+          questions = lastCall.questions;
+        }
+      }
 
-    // Initialize phone interview in Application model
-    if (!application.phoneInterview) {
-      application.phoneInterview = {};
+      // If no stored questions, generate based on resume
+      if (questions.length === 0) {
+        if (!user.resumeText || user.resumeText.trim().length === 0) {
+          return res.status(400).json({ 
+            error: 'Resume text not available. Cannot generate interview questions without resume.' 
+          });
+        }
+
+        // Generate questions based on resume only (no job)
+        const questionsResponse = await callLLM('SCREENING_QUESTIONS', {
+          candidateInfo: {
+            name: user.name,
+            skills: user.tags || [],
+          },
+          resumeText: user.resumeText, // Pass resume text for generic questions
+        });
+        const parsed = parseJsonSafely(questionsResponse);
+        questions = parsed.ok ? parsed.json.screening_questions : [];
+      }
+    } else {
+      // Application-based call: Use questions from Application if already stored, otherwise generate
+      if (application.phoneInterview && application.phoneInterview.questions && application.phoneInterview.questions.length > 0) {
+        questions = application.phoneInterview.questions;
+      } else {
+        // Generate questions on the spot (job-specific)
+        const questionsResponse = await callLLM('SCREENING_QUESTIONS', {
+          job,
+          candidateInfo: {
+            name: user.name,
+            skills: application.skillsMatched || user.tags || [],
+          },
+        });
+        const parsed = parseJsonSafely(questionsResponse);
+        questions = parsed.ok ? parsed.json.screening_questions : [];
+      }
     }
-    application.phoneInterview.status = start_time ? 'scheduled' : 'initiated';
-    application.phoneInterview.phoneNumber = phoneNumber;
-    application.phoneInterview.startedAt = start_time ? null : new Date();
-    application.phoneInterview.scheduledStartTime = start_time || null;
-    application.phoneInterview.questions = questions; // Store questions in Application
-    await application.save();
 
     // Make Bland AI call (with optional start_time for scheduling)
     const callResult = await makeBlandAICall({
       phoneNumber,
       candidateName: user.name,
-      job,
-      application,
+      job: job || null, // null for user-only calls
+      application: application || null, // null for user-only calls
+      user: isUserOnlyCall ? user : null, // Pass user for generic calls
       questions,
-      applicationId: application._id.toString(), // Use application ID for webhook
+      applicationId: application ? application._id.toString() : null,
+      userId: user._id.toString(), // Always pass userId
       startTime: start_time || null,
     });
 
-    // Update application with call ID
-    application.phoneInterview.callId = callResult.callId;
-    application.phoneInterview.status = start_time ? 'scheduled' : 'ringing';
-    if (start_time) {
-      application.phoneInterview.scheduledStartTime = start_time;
+    if (isUserOnlyCall) {
+      // Store in user's phoneInterviewSummaries array
+      const phoneInterviewSummary = {
+        callId: callResult.callId,
+        status: start_time ? 'scheduled' : 'ringing',
+        phoneNumber: phoneNumber,
+        startedAt: start_time ? null : new Date(),
+        scheduledStartTime: start_time || null,
+        questions: questions,
+      };
+
+      // Add to user's phone interview summaries array
+      if (!user.phoneInterviewSummaries) {
+        user.phoneInterviewSummaries = [];
+      }
+      user.phoneInterviewSummaries.push(phoneInterviewSummary);
+      await user.save();
+    } else {
+      // Store in application's phoneInterview object
+      if (!application.phoneInterview) {
+        application.phoneInterview = {};
+      }
+      application.phoneInterview.callId = callResult.callId;
+      application.phoneInterview.status = start_time ? 'scheduled' : 'ringing';
+      application.phoneInterview.phoneNumber = phoneNumber;
+      application.phoneInterview.startedAt = start_time ? null : new Date();
+      application.phoneInterview.scheduledStartTime = start_time || null;
+      application.phoneInterview.questions = questions;
+      await application.save();
     }
-    await application.save();
 
     // Send email notification about the phone interview (async - don't wait)
     if (user.email) {
@@ -859,11 +924,12 @@ router.post('/:id/schedule-call', async (req, res) => {
           // Generate email content using LLM
           const emailLLMResponse = await callLLM('PHONE_INTERVIEW_EMAIL', {
             candidateName: user.name,
-            role: job.role,
-            company: job.company_name,
+            role: job ? job.role : 'Potential Role', // Generic if no job
+            company: job ? job.company_name : 'Paytm',
             phoneNumber: phoneNumber,
             scheduledStartTime: start_time,
             questions: questions,
+            applicationId: application ? application._id.toString() : null,
           });
 
           const emailParsed = parseJsonSafely(emailLLMResponse);
@@ -874,13 +940,13 @@ router.post('/:id/schedule-call', async (req, res) => {
             // Send email
             const emailResult = await sendEmail({
               to: user.email,
-              subject: emailData.subject || `Phone Interview Invitation - ${job.role} at ${job.company_name}`,
+              subject: emailData.subject || (job ? `Phone Interview Invitation - ${job.role} at ${job.company_name}` : 'Phone Interview Invitation - Paytm'),
               html: emailData.html_snippet || emailData.plain_text,
               text: emailData.plain_text || emailData.html_snippet?.replace(/<[^>]*>/g, ''),
             });
 
             if (emailResult.ok) {
-              console.log(`[Application] Phone interview email sent to ${user.email} for application ${application._id}`);
+              console.log(`[Application] Phone interview email sent to ${user.email} for ${isUserOnlyCall ? 'user' : 'application'} ${isUserOnlyCall ? user._id : application._id}`);
             } else {
               console.error(`[Application] Failed to send phone interview email:`, emailResult.error);
             }
@@ -888,23 +954,23 @@ router.post('/:id/schedule-call', async (req, res) => {
             console.error('[Application] Failed to parse phone interview email response:', emailParsed.error);
             // Fallback: Send a simple email if LLM fails
             const fallbackSubject = start_time 
-              ? `Phone Interview Scheduled - ${job.role} at ${job.company_name}`
-              : `Phone Interview Invitation - ${job.role} at ${job.company_name}`;
+              ? (job ? `Phone Interview Scheduled - ${job.role} at ${job.company_name}` : 'Phone Interview Scheduled - Paytm')
+              : (job ? `Phone Interview Invitation - ${job.role} at ${job.company_name}` : 'Phone Interview Invitation - Paytm');
             
             const fallbackHtml = `
               <h2>Hello ${user.name},</h2>
-              <p>Congratulations! You have been shortlisted for the <strong>${job.role}</strong> position at ${job.company_name || 'Paytm'}.</p>
+              <p>${job ? `Congratulations! You have been shortlisted for the <strong>${job.role}</strong> position at ${job.company_name || 'Paytm'}.</p>` : 'We came across your profile and would like to have a conversation with you.</p>'}
               <p>We would like to invite you for an AI-based phone interview.</p>
               ${start_time ? `<p><strong>Scheduled Time:</strong> ${start_time}</p>` : '<p>You will receive a call shortly at: <strong>' + phoneNumber + '</strong></p>'}
               <p><strong>What to expect:</strong></p>
               <ul>
                 <li>An AI interviewer named "Neo" will call you</li>
                 <li>The interview will take approximately 5-10 minutes</li>
-                <li>You'll be asked technical and behavioral questions</li>
+                <li>You'll be asked technical and behavioral questions${job ? '' : ' based on your resume'}</li>
                 <li>Please answer naturally and be patient if there are brief pauses</li>
               </ul>
               <p>We look forward to speaking with you!</p>
-              <p>Best regards,<br>${job.company_name || 'Paytm'} HR Team</p>
+              <p>Best regards,<br>${job ? job.company_name || 'Paytm' : 'Paytm'} HR Team</p>
             `;
             
             await sendEmail({
@@ -926,10 +992,14 @@ router.post('/:id/schedule-call', async (req, res) => {
       callId: callResult.callId,
       status: callResult.status,
       phoneNumber: phoneNumber,
-      applicationId: application._id,
+      userId: user._id,
+      applicationId: application ? application._id : null,
+      isUserOnlyCall: isUserOnlyCall,
       startTime: start_time || null,
       emailSent: user.email ? true : false,
-      checkStatusUrl: `/api/applications/${application._id}/phone-call-status`,
+      checkStatusUrl: isUserOnlyCall 
+        ? `/api/users/${user._id}/phone-call-status`
+        : `/api/applications/${application._id}/phone-call-status`,
     });
   } catch (error) {
     console.error('Error scheduling/initiating phone call:', error);
