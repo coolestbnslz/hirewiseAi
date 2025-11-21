@@ -606,19 +606,7 @@ async function processApplicationScoring(applicationId, jobId, userId, resumePat
       application.recommendedAction = recommendedAction;
       await application.save();
 
-      // Auto-create screening if threshold met
-      if (unifiedScore >= job.settings.autoCreateScreeningThreshold) {
-        const existingScreening = await Screening.findOne({ applicationId: application._id });
-        if (!existingScreening) {
-          const screening = new Screening({
-            applicationId: application._id,
-            jobId: job._id,
-            screening_link: `https://hirewise.app/screening/${uuidv4()}`,
-          });
-          await screening.save();
-          console.log(`[Application] Auto-created screening for application ${applicationId}`);
-        }
-      }
+      // Note: Screening model creation removed - no longer auto-creating screenings
 
       console.log(`[Application] Completed async scoring for application ${applicationId}`);
     } else {
@@ -669,93 +657,93 @@ router.post('/:id/approve-level1', async (req, res) => {
     const job = application.jobId;
     const user = application.userId;
 
-    // Find or create screening
-    let screening = await Screening.findOne({ applicationId: application._id });
-    if (!screening) {
-      screening = new Screening({
-        applicationId: application._id,
-        jobId: job._id,
-        screening_link: `https://hirewise.app/screening/${uuidv4()}`,
-      });
-      await screening.save();
-    }
+    // Generate email data (but don't send it)
+    let emailData = null;
+    let emailError = null;
 
-    // Auto-send email if enabled (original functionality) - Keep existing email logic
     if (job.settings.autoInviteOnLevel1Approval && 
         application.unifiedScore >= job.settings.autoInviteThreshold) {
       
-      // Generate dynamic email based on candidate profile and scores
-      const emailLLMResponse = await callLLM('EMAIL_GENERATOR', {
-        candidateName: user.name,
-        candidateEmail: user.email,
-        role: job.role,
-        company: job.company_name,
-        seniority: job.seniority,
-        screening_link: screening.screening_link,
-        screening_questions: [], // Questions will be generated on-the-spot when candidate accesses screening
-        // Candidate scores and highlights
-        scores: {
-          resumeScore: application.scores.resumeScore,
-          githubPortfolioScore: application.scores.githubPortfolioScore,
-          compensationScore: application.scores.compensationScore,
-          unifiedScore: application.unifiedScore,
-        },
-        // Resume highlights from LLM analysis
-        resumeHighlights: application.rawResumeLLM ? (() => {
-          try {
-            const parsed = JSON.parse(application.rawResumeLLM);
-            return {
-              skills_matched: parsed.skills_matched || [],
-              top_reasons: parsed.top_reasons || [],
-              recommended_action: parsed.recommended_action,
-            };
-          } catch {
-            return null;
-          }
-        })() : null,
-        // User profile info
-        userProfile: {
-          githubUrl: user.githubUrl,
-          portfolioUrl: user.portfolioUrl,
-          compensationExpectation: user.compensationExpectation,
-        },
-        // Job details for personalization
-        jobDetails: {
-          must_have_skills: job.must_have_skills,
-          nice_to_have: job.nice_to_have,
-          tags: job.tags,
-        },
-      });
-
-      const emailParsed = parseJsonSafely(emailLLMResponse);
-      
-      if (emailParsed.ok) {
-        const emailData = emailParsed.json;
-        
-        // Send email
-        const emailResult = await sendEmail({
-          to: user.email,
-          subject: emailData.subject,
-          html: emailData.html_snippet,
-          text: emailData.plain_text,
+      try {
+        // Generate dynamic email based on candidate profile and scores
+        const emailLLMResponse = await callLLM('EMAIL_GENERATOR', {
+          candidateName: user.name,
+          candidateEmail: user.email,
+          role: job.role,
+          company: job.company_name,
+          seniority: job.seniority,
+          screening_link: null, // No screening link since we're not creating screening
+          screening_questions: [], // Questions will be generated on-the-spot when candidate accesses screening
+          // Candidate scores and highlights
+          scores: {
+            resumeScore: application.scores?.resumeScore,
+            githubPortfolioScore: application.scores?.githubPortfolioScore,
+            compensationScore: application.scores?.compensationScore,
+            unifiedScore: application.unifiedScore,
+          },
+          // Resume highlights from LLM analysis
+          resumeHighlights: application.rawResumeLLM ? (() => {
+            try {
+              const parsed = typeof application.rawResumeLLM === 'string' 
+                ? JSON.parse(application.rawResumeLLM)
+                : application.rawResumeLLM;
+              return {
+                skills_matched: parsed.skills_matched || [],
+                top_reasons: parsed.top_reasons || [],
+                recommended_action: parsed.recommended_action,
+              };
+            } catch {
+              return null;
+            }
+          })() : null,
+          // User profile info
+          userProfile: {
+            githubUrl: user.githubUrl,
+            portfolioUrl: user.portfolioUrl,
+            compensationExpectation: user.compensationExpectation,
+          },
+          // Job details for personalization
+          jobDetails: {
+            must_have_skills: job.must_have_skills,
+            nice_to_have: job.nice_to_have,
+            tags: job.tags,
+          },
         });
 
-        if (!emailResult.ok) {
-          console.error('[Application] Failed to send email:', emailResult.error);
-          // Continue even if email fails - don't block the approval
+        const emailParsed = parseJsonSafely(emailLLMResponse);
+        
+        if (emailParsed.ok) {
+          emailData = emailParsed.json;
+        } else {
+          emailError = emailParsed.error || 'Failed to parse email response';
         }
-
-        screening.invite_sent_at = new Date();
-        await screening.save();
+      } catch (error) {
+        console.error('[Application] Error generating email:', error);
+        emailError = error.message || 'Failed to generate email';
       }
     }
 
     res.json({ 
       message: 'Application approved',
-      application,
-      emailSent: job.settings.autoInviteOnLevel1Approval && 
-                 application.unifiedScore >= job.settings.autoInviteThreshold,
-      screeningId: screening._id, // For video screenings only
+      application: {
+        _id: application._id,
+        jobId: application.jobId,
+        userId: application.userId,
+        level1_approved: application.level1_approved,
+        unifiedScore: application.unifiedScore,
+        scores: application.scores,
+        skillsMatched: application.skillsMatched,
+        topReasons: application.topReasons,
+        recommendedAction: application.recommendedAction,
+      },
+      emailData: emailData ? {
+        subject: emailData.subject,
+        html: emailData.html_snippet,
+        text: emailData.plain_text,
+        preview_text: emailData.preview_text,
+        to: user.email,
+      } : null,
+      emailError: emailError || null,
       scheduleCallUrl: `/api/applications/${application._id}/schedule-call`, // Phone interview uses applicationId
     });
   } catch (error) {
