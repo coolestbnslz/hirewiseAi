@@ -661,66 +661,63 @@ router.post('/:id/approve-level1', async (req, res) => {
     let emailData = null;
     let emailError = null;
 
-    if (job.settings.autoInviteOnLevel1Approval && 
-        application.unifiedScore >= job.settings.autoInviteThreshold) {
       
-      try {
-        // Generate dynamic email based on candidate profile and scores
-        const emailLLMResponse = await callLLM('EMAIL_GENERATOR', {
-          candidateName: user.name,
-          candidateEmail: user.email,
-          role: job.role,
-          company: job.company_name,
-          seniority: job.seniority,
-          screening_link: null, // No screening link since we're not creating screening
-          screening_questions: [], // Questions will be generated on-the-spot when candidate accesses screening
-          // Candidate scores and highlights
-          scores: {
-            resumeScore: application.scores?.resumeScore,
-            githubPortfolioScore: application.scores?.githubPortfolioScore,
-            compensationScore: application.scores?.compensationScore,
-            unifiedScore: application.unifiedScore,
-          },
-          // Resume highlights from LLM analysis
-          resumeHighlights: application.rawResumeLLM ? (() => {
-            try {
-              const parsed = typeof application.rawResumeLLM === 'string' 
-                ? JSON.parse(application.rawResumeLLM)
-                : application.rawResumeLLM;
-              return {
-                skills_matched: parsed.skills_matched || [],
-                top_reasons: parsed.top_reasons || [],
-                recommended_action: parsed.recommended_action,
-              };
-            } catch {
-              return null;
-            }
-          })() : null,
-          // User profile info
-          userProfile: {
-            githubUrl: user.githubUrl,
-            portfolioUrl: user.portfolioUrl,
-            compensationExpectation: user.compensationExpectation,
-          },
-          // Job details for personalization
-          jobDetails: {
-            must_have_skills: job.must_have_skills,
-            nice_to_have: job.nice_to_have,
-            tags: job.tags,
-          },
-        });
-
-        const emailParsed = parseJsonSafely(emailLLMResponse);
-        
-        if (emailParsed.ok) {
-          emailData = emailParsed.json;
-        } else {
-          emailError = emailParsed.error || 'Failed to parse email response';
+    try {
+    // Generate dynamic email based on candidate profile and scores
+    const emailLLMResponse = await callLLM('EMAIL_GENERATOR', {
+        candidateName: user.name,
+        candidateEmail: user.email,
+        role: job.role,
+        company: job.company_name,
+        seniority: job.seniority,
+        screening_link: null, // No screening link since we're not creating screening
+        screening_questions: [], // Questions will be generated on-the-spot when candidate accesses screening
+        // Candidate scores and highlights
+        scores: {
+        resumeScore: application.scores?.resumeScore,
+        githubPortfolioScore: application.scores?.githubPortfolioScore,
+        compensationScore: application.scores?.compensationScore,
+        unifiedScore: application.unifiedScore,
+        },
+        // Resume highlights from LLM analysis
+        resumeHighlights: application.rawResumeLLM ? (() => {
+        try {
+            const parsed = typeof application.rawResumeLLM === 'string' 
+            ? JSON.parse(application.rawResumeLLM)
+            : application.rawResumeLLM;
+            return {
+            skills_matched: parsed.skills_matched || [],
+            top_reasons: parsed.top_reasons || [],
+            recommended_action: parsed.recommended_action,
+            };
+        } catch {
+            return null;
         }
-      } catch (error) {
-        console.error('[Application] Error generating email:', error);
-        emailError = error.message || 'Failed to generate email';
-      }
+        })() : null,
+        // User profile info
+        userProfile: {
+        githubUrl: user.githubUrl,
+        portfolioUrl: user.portfolioUrl,
+        compensationExpectation: user.compensationExpectation,
+        },
+        // Job details for personalization
+        jobDetails: {
+        must_have_skills: job.must_have_skills,
+        nice_to_have: job.nice_to_have,
+        tags: job.tags,
+        },
+    });
+
+    const emailParsed = parseJsonSafely(emailLLMResponse);
+    
+    if (emailParsed.ok) {
+        emailData = emailParsed.json;
+    } else {
+        emailError = emailParsed.error || 'Failed to parse email response';
+    }
+    } catch (error) {
+    console.error('[Application] Error generating email:', error);
+    emailError = error.message || 'Failed to generate email';
     }
 
     res.json({ 
