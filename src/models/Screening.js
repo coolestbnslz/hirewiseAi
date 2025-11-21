@@ -41,6 +41,31 @@ const screeningSchema = new mongoose.Schema({
   invite_sent_at: {
     type: Date,
   },
+  // Phone interview via Bland AI
+  phoneInterview: {
+    callId: String, // Bland AI call ID
+    status: {
+      type: String,
+      enum: ['not_initiated', 'initiated', 'ringing', 'in_progress', 'completed', 'failed', 'no_answer'],
+      default: 'not_initiated',
+    },
+    phoneNumber: String,
+    startedAt: Date,
+    completedAt: Date,
+    duration: Number, // Duration in seconds
+    recordingUrl: String,
+    transcript: String,
+    summary: String,
+    analysis: {
+      technical_skills: [String],
+      behavioral_traits: [String],
+      communication_quality: Number,
+      overall_fit: Number,
+      strengths: [String],
+      concerns: [String],
+    },
+    error: String,
+  },
 }, {
   timestamps: true,
 });

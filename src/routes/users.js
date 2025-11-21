@@ -1,10 +1,66 @@
 import express from 'express';
+import fs from 'fs/promises';
+import path from 'path';
 import User from '../models/User.js';
 import { callLLM } from '../lib/llm.js';
 import { parseJsonSafely } from '../lib/parseJsonSafely.js';
 import { fetchGitHubData, formatGitHubDataForLLM } from '../lib/github.js';
 
 const router = express.Router();
+
+// GET /api/users/:id/resume - Download user's resume (must come before /:id route)
+router.get('/:id/resume', async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id);
+    
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (!user.resumePath) {
+      return res.status(404).json({ error: 'Resume not found for this user' });
+    }
+
+    // Check if file exists
+    try {
+      await fs.access(user.resumePath);
+    } catch (error) {
+      console.error(`[User] Resume file not found at path: ${user.resumePath}`, error);
+      return res.status(404).json({ error: 'Resume file not found on server' });
+    }
+
+    // Get file extension to determine content type
+    const ext = path.extname(user.resumePath).toLowerCase();
+    const contentTypes = {
+      '.pdf': 'application/pdf',
+      '.doc': 'application/msword',
+      '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      '.txt': 'text/plain',
+    };
+    const contentType = contentTypes[ext] || 'application/octet-stream';
+
+    // Get original filename from resumePath (format: timestamp-originalname)
+    const filename = path.basename(user.resumePath);
+    // Extract original filename (remove timestamp prefix)
+    const originalFilename = filename.includes('-') 
+      ? filename.substring(filename.indexOf('-') + 1)
+      : filename;
+
+    // Set headers for file download
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="${originalFilename}"`);
+    res.setHeader('Cache-Control', 'no-cache');
+
+    // Read and send file
+    const fileBuffer = await fs.readFile(user.resumePath);
+    res.send(fileBuffer);
+
+    console.log(`[User] Resume downloaded for user ${user._id}: ${originalFilename}`);
+  } catch (error) {
+    console.error('Error downloading resume:', error);
+    res.status(500).json({ error: 'Internal server error', details: error.message });
+  }
+});
 
 // GET /api/users/:id - Get user profile
 router.get('/:id', async (req, res) => {

@@ -13,6 +13,8 @@ import { upload, uploadMultiple } from '../middleware/upload.js';
 import { v4 as uuidv4 } from 'uuid';
 import { fetchGitHubData, formatGitHubDataForLLM } from '../lib/github.js';
 import BatchResumeValidation from '../models/BatchResumeValidation.js';
+import { makeBlandAICall } from '../lib/blandAi.js';
+import { formatPhoneNumber } from '../lib/phoneFormatter.js';
 
 const router = express.Router();
 
@@ -191,32 +193,128 @@ router.post('/:jobId', upload.single('resume'), async (req, res) => {
       console.warn('[Application] Warning: No text extracted from resume file');
     }
 
+    // Quick parse resume to extract contact info (for immediate user creation)
+    // This is a lightweight parse just for contact info, full parse happens async
+    let quickParsedData = null;
+    try {
+      const quickParseResponse = await callLLM('RESUME_PARSER', { resumeText });
+      const quickParsed = parseJsonSafely(quickParseResponse);
+      if (quickParsed.ok) {
+        quickParsedData = quickParsed.json;
+        console.log('[Application] Quick resume parse completed for contact info extraction');
+      }
+    } catch (error) {
+      console.warn('[Application] Quick resume parse failed, will use provided info:', error.message);
+      // Continue with provided info if parse fails
+    }
+
+    // Extract contact info from resume if available
+    let extractedName = applicant_name;
+    let extractedEmail = applicant_email;
+    let extractedPhone = applicant_phone;
+    let extractedLinkedIn = linkedinUrl;
+    let extractedGithub = githubUrl;
+    let extractedPortfolio = portfolioUrl;
+
+    if (quickParsedData) {
+      // Extract name
+      if (quickParsedData.name && (!extractedName || extractedName === 'Unknown')) {
+        extractedName = quickParsedData.name.trim();
+        console.log(`[Application] Extracted name from resume: ${extractedName}`);
+      }
+      
+      // Extract contact info
+      if (quickParsedData.contact) {
+        if (quickParsedData.contact.email && !extractedEmail) {
+          extractedEmail = quickParsedData.contact.email.trim().toLowerCase();
+          console.log(`[Application] Extracted email from resume: ${extractedEmail}`);
+        }
+        if (quickParsedData.contact.phone && !extractedPhone) {
+          extractedPhone = quickParsedData.contact.phone.trim();
+          console.log(`[Application] Extracted phone from resume: ${extractedPhone}`);
+        }
+        if (quickParsedData.contact.linkedin && !extractedLinkedIn) {
+          extractedLinkedIn = quickParsedData.contact.linkedin.trim();
+          console.log(`[Application] Extracted LinkedIn URL from resume: ${extractedLinkedIn}`);
+        }
+        if (quickParsedData.contact.github && !extractedGithub) {
+          extractedGithub = quickParsedData.contact.github.trim();
+          console.log(`[Application] Extracted GitHub URL from resume: ${extractedGithub}`);
+        }
+        if (quickParsedData.contact.portfolio && !extractedPortfolio) {
+          extractedPortfolio = quickParsedData.contact.portfolio.trim();
+          console.log(`[Application] Extracted portfolio URL from resume: ${extractedPortfolio}`);
+        }
+      }
+    }
+
+    // Use extracted email if available, otherwise use provided email
+    const finalEmail = extractedEmail || applicant_email;
+    if (!finalEmail) {
+      return res.status(400).json({ error: 'Email is required. Please provide applicant_email or ensure resume contains email address.' });
+    }
+
     // Find or create user (minimal processing for immediate response)
-    let user = await User.findOne({ email: applicant_email.toLowerCase() });
+    let user = await User.findOne({ email: finalEmail.toLowerCase() });
     
-    // Update user with basic info immediately
+    // Update user with basic info immediately (prefer extracted data if available)
     if (!user) {
       user = new User({
-        email: applicant_email.toLowerCase(),
-        name: applicant_name || 'Unknown',
-        phone: applicant_phone,
+        email: finalEmail.toLowerCase(),
+        name: extractedName || applicant_name || 'Unknown',
+        phone: extractedPhone || applicant_phone,
         resumePath,
         resumeText,
-        githubUrl,
-        portfolioUrl,
-        linkedinUrl,
+        githubUrl: extractedGithub || githubUrl,
+        portfolioUrl: extractedPortfolio || portfolioUrl,
+        linkedinUrl: extractedLinkedIn || linkedinUrl,
         compensationExpectation,
       });
     } else {
-      // Update user info
+      // Update user info (prefer extracted data if available and current value is missing)
       if (resumePath) user.resumePath = resumePath;
-      if (applicant_name) user.name = applicant_name;
-      if (applicant_phone) user.phone = applicant_phone;
-      if (applicant_email) user.email = applicant_email.toLowerCase();
       if (resumeText) user.resumeText = resumeText;
-      if (githubUrl) user.githubUrl = githubUrl;
-      if (portfolioUrl) user.portfolioUrl = portfolioUrl;
-      if (linkedinUrl) user.linkedinUrl = linkedinUrl;
+      
+      // Update name if extracted and current is generic/missing
+      if (extractedName && (!user.name || user.name === 'Unknown' || user.name.trim() === '')) {
+        user.name = extractedName;
+      } else if (applicant_name && applicant_name !== 'Unknown') {
+        user.name = applicant_name;
+      }
+      
+      // Update phone if extracted and current is missing
+      if (extractedPhone && (!user.phone || user.phone.trim() === '')) {
+        user.phone = extractedPhone;
+      } else if (applicant_phone) {
+        user.phone = applicant_phone;
+      }
+      
+      // Update email only if extracted email matches (for validation)
+      if (extractedEmail && extractedEmail === user.email.toLowerCase()) {
+        // Email matches, no update needed
+      } else if (applicant_email) {
+        // Keep existing email to maintain user identity
+      }
+      
+      // Update URLs if extracted and current is missing
+      if (extractedLinkedIn && (!user.linkedinUrl || user.linkedinUrl.trim() === '')) {
+        user.linkedinUrl = extractedLinkedIn;
+      } else if (linkedinUrl) {
+        user.linkedinUrl = linkedinUrl;
+      }
+      
+      if (extractedGithub && (!user.githubUrl || user.githubUrl.trim() === '')) {
+        user.githubUrl = extractedGithub;
+      } else if (githubUrl) {
+        user.githubUrl = githubUrl;
+      }
+      
+      if (extractedPortfolio && (!user.portfolioUrl || user.portfolioUrl.trim() === '')) {
+        user.portfolioUrl = extractedPortfolio;
+      } else if (portfolioUrl) {
+        user.portfolioUrl = portfolioUrl;
+      }
+      
       if (compensationExpectation) user.compensationExpectation = compensationExpectation;
     }
     await user.save();
@@ -366,26 +464,80 @@ async function processApplicationScoring(applicationId, job, user, resumeText, g
     // Wait for all resume processing to complete
     await Promise.all(resumeProcessingPromises);
     
-    // Extract GitHub and portfolio URLs from parsed resume if not provided
+    // Extract contact information from parsed resume if not provided
+    let extractedName = null;
+    let extractedEmail = null;
+    let extractedPhone = null;
+    let extractedLinkedIn = null;
     let finalGithubUrl = githubUrl || user.githubUrl;
     let finalPortfolioUrl = portfolioUrl || user.portfolioUrl;
     let githubDataFormatted = '';
     
-    if (parsedResumeData && parsedResumeData.contact) {
-      if (!finalGithubUrl && parsedResumeData.contact.github) {
-        finalGithubUrl = parsedResumeData.contact.github;
-        console.log(`[Application] Extracted GitHub URL from parsed resume: ${finalGithubUrl}`);
+    if (parsedResumeData) {
+      // Extract name from parsed resume
+      if (parsedResumeData.name) {
+        extractedName = parsedResumeData.name.trim();
+        console.log(`[Application] Extracted name from parsed resume: ${extractedName}`);
       }
-      if (!finalPortfolioUrl && parsedResumeData.contact.portfolio) {
-        finalPortfolioUrl = parsedResumeData.contact.portfolio;
-        console.log(`[Application] Extracted portfolio URL from parsed resume: ${finalPortfolioUrl}`);
+      
+      // Extract contact information from parsed resume
+      if (parsedResumeData.contact) {
+        if (parsedResumeData.contact.email) {
+          extractedEmail = parsedResumeData.contact.email.trim().toLowerCase();
+          console.log(`[Application] Extracted email from parsed resume: ${extractedEmail}`);
+        }
+        if (parsedResumeData.contact.phone) {
+          extractedPhone = parsedResumeData.contact.phone.trim();
+          console.log(`[Application] Extracted phone from parsed resume: ${extractedPhone}`);
+        }
+        if (parsedResumeData.contact.linkedin) {
+          extractedLinkedIn = parsedResumeData.contact.linkedin.trim();
+          console.log(`[Application] Extracted LinkedIn URL from parsed resume: ${extractedLinkedIn}`);
+        }
+        if (!finalGithubUrl && parsedResumeData.contact.github) {
+          finalGithubUrl = parsedResumeData.contact.github.trim();
+          console.log(`[Application] Extracted GitHub URL from parsed resume: ${finalGithubUrl}`);
+        }
+        if (!finalPortfolioUrl && parsedResumeData.contact.portfolio) {
+          finalPortfolioUrl = parsedResumeData.contact.portfolio.trim();
+          console.log(`[Application] Extracted portfolio URL from parsed resume: ${finalPortfolioUrl}`);
+        }
       }
     }
     
-    // Update user with extracted data
+    // Update user with extracted data (only if not already provided)
     if (resumeTags.length > 0) user.tags = resumeTags;
     if (parsedResumeData) {
       user.parsedResume = parsedResumeData;
+      
+      // Update name if extracted and not already set or if current name is generic
+      if (extractedName && (!user.name || user.name === 'Unknown' || user.name.trim() === '')) {
+        user.name = extractedName;
+        console.log(`[Application] Updated user name from resume: ${extractedName}`);
+      }
+      
+      // Update email if extracted and matches the application email (for validation)
+      // Note: We don't change email if it's different to avoid breaking user identity
+      if (extractedEmail && extractedEmail === user.email.toLowerCase()) {
+        // Email matches, no update needed
+      } else if (extractedEmail && !user.email) {
+        // Only update if user email is missing
+        user.email = extractedEmail;
+        console.log(`[Application] Updated user email from resume: ${extractedEmail}`);
+      }
+      
+      // Update phone if extracted and not already provided
+      if (extractedPhone && (!user.phone || user.phone.trim() === '')) {
+        user.phone = extractedPhone;
+        console.log(`[Application] Updated user phone from resume: ${extractedPhone}`);
+      }
+      
+      // Update LinkedIn if extracted and not already provided
+      if (extractedLinkedIn && (!user.linkedinUrl || user.linkedinUrl.trim() === '')) {
+        user.linkedinUrl = extractedLinkedIn;
+        console.log(`[Application] Updated user LinkedIn URL from resume: ${extractedLinkedIn}`);
+      }
+      
       // Extract and store experience-related fields from parsed resume
       if (parsedResumeData.currentTenure) user.currentTenure = parsedResumeData.currentTenure;
       if (parsedResumeData.totalExperience) user.totalExperience = parsedResumeData.totalExperience;
@@ -566,20 +718,83 @@ router.post('/:id/approve-level1', async (req, res) => {
     const job = application.jobId;
     const user = application.userId;
 
-    // Auto-send email if enabled
+    // Find or create screening
+    let screening = await Screening.findOne({ applicationId: application._id });
+    if (!screening) {
+      screening = new Screening({
+        applicationId: application._id,
+        jobId: job._id,
+        screening_link: `https://hirewise.app/screening/${uuidv4()}`,
+      });
+      await screening.save();
+    }
+
+    // Auto-initiate phone interview if enabled and threshold met
     if (job.settings.autoInviteOnLevel1Approval && 
         application.unifiedScore >= job.settings.autoInviteThreshold) {
       
-      // Find or create screening
-      let screening = await Screening.findOne({ applicationId: application._id });
-      if (!screening) {
-        screening = new Screening({
-          applicationId: application._id,
-          jobId: job._id,
-          screening_link: `https://hirewise.app/screening/${uuidv4()}`,
-        });
-        await screening.save();
+      // Initiate phone call via Bland AI (async - don't wait)
+      if (user.phone) {
+        // Generate questions first, then initiate call
+        (async () => {
+          try {
+            // Generate questions
+            const questionsResponse = await callLLM('SCREENING_QUESTIONS', {
+              job,
+              candidateInfo: {
+                name: user.name,
+                skills: application.skillsMatched || user.tags || [],
+              },
+            });
+            const parsed = parseJsonSafely(questionsResponse);
+            const questions = parsed.ok ? parsed.json.screening_questions : [];
+            
+            // Format phone number to E.164 format (required by Bland AI)
+            let phoneNumber;
+            try {
+              phoneNumber = formatPhoneNumber(user.phone, '91'); // Default to India (+91)
+            } catch (error) {
+              console.error(`[Application] Invalid phone number format for user ${user._id}:`, error.message);
+              throw new Error(`Invalid phone number format: ${error.message}`);
+            }
+            
+            // Initialize phone interview
+            screening.phoneInterview = {
+              status: 'initiated',
+              phoneNumber: phoneNumber,
+              startedAt: new Date(),
+            };
+            screening.screening_questions = questions;
+            await screening.save();
+            
+            // Make Bland AI call
+            const callResult = await makeBlandAICall({
+              phoneNumber: phoneNumber,
+              candidateName: user.name,
+              job,
+              application,
+              questions: questions,
+              screeningId: screening._id.toString(),
+            });
+            
+            // Update screening with call ID
+            screening.phoneInterview.callId = callResult.callId;
+            screening.phoneInterview.status = 'ringing';
+            await screening.save();
+            
+            console.log(`[Application] Phone call initiated for screening ${screening._id}, Call ID: ${callResult.callId}`);
+          } catch (error) {
+            console.error(`[Application] Error initiating phone call for screening ${screening._id}:`, error);
+            if (screening.phoneInterview) {
+              screening.phoneInterview.status = 'failed';
+              screening.phoneInterview.error = error.message;
+              await screening.save();
+            }
+          }
+        })();
       }
+      
+      // Auto-send email if enabled (original functionality) - Keep existing email logic
 
       // Generate dynamic email based on candidate profile and scores
       const emailLLMResponse = await callLLM('EMAIL_GENERATOR', {
@@ -895,17 +1110,28 @@ async function processSingleResumeValidation(batchId, job, file, index) {
 
     // Create or find user (use filename as placeholder email if no email can be extracted)
     // For batch uploads, we'll create users with placeholder emails
-    const placeholderEmail = parsedResumeData?.contact?.email || `batch-${batchId}-${index}@hirewise.app`;
-    let user = await User.findOne({ email: placeholderEmail.toLowerCase() });
+    // Extract contact information from parsed resume
+    const extractedEmail = parsedResumeData?.contact?.email?.trim().toLowerCase() || `batch-${batchId}-${index}@hirewise.app`;
+    const extractedName = parsedResumeData?.name?.trim() || file.originalname.replace(/\.[^/.]+$/, '');
+    const extractedPhone = parsedResumeData?.contact?.phone?.trim() || null;
+    const extractedLinkedIn = parsedResumeData?.contact?.linkedin?.trim() || null;
+    const extractedGithub = parsedResumeData?.contact?.github?.trim() || null;
+    const extractedPortfolio = parsedResumeData?.contact?.portfolio?.trim() || null;
+
+    let user = await User.findOne({ email: extractedEmail.toLowerCase() });
     
     if (!user) {
       user = new User({
-        email: placeholderEmail.toLowerCase(),
-        name: parsedResumeData?.name || file.originalname.replace(/\.[^/.]+$/, ''), // Use parsed name or filename
+        email: extractedEmail.toLowerCase(),
+        name: extractedName,
+        phone: extractedPhone,
         resumePath,
         resumeText,
         tags: resumeTags,
         parsedResume: parsedResumeData,
+        linkedinUrl: extractedLinkedIn,
+        githubUrl: extractedGithub,
+        portfolioUrl: extractedPortfolio,
         // Extract experience-related fields
         currentTenure: parsedResumeData?.currentTenure || null,
         totalExperience: parsedResumeData?.totalExperience || null,
@@ -917,6 +1143,32 @@ async function processSingleResumeValidation(batchId, job, file, index) {
       user.resumePath = resumePath;
       user.resumeText = resumeText;
       if (resumeTags.length > 0) user.tags = resumeTags;
+      
+      // Update name if extracted and current is generic/missing
+      if (extractedName && (!user.name || user.name === 'Unknown' || user.name.trim() === '')) {
+        user.name = extractedName;
+      }
+      
+      // Update phone if extracted and current is missing
+      if (extractedPhone && (!user.phone || user.phone.trim() === '')) {
+        user.phone = extractedPhone;
+      }
+      
+      // Update LinkedIn if extracted and current is missing
+      if (extractedLinkedIn && (!user.linkedinUrl || user.linkedinUrl.trim() === '')) {
+        user.linkedinUrl = extractedLinkedIn;
+      }
+      
+      // Update GitHub if extracted and current is missing
+      if (extractedGithub && (!user.githubUrl || user.githubUrl.trim() === '')) {
+        user.githubUrl = extractedGithub;
+      }
+      
+      // Update portfolio if extracted and current is missing
+      if (extractedPortfolio && (!user.portfolioUrl || user.portfolioUrl.trim() === '')) {
+        user.portfolioUrl = extractedPortfolio;
+      }
+      
       if (parsedResumeData) {
         user.parsedResume = parsedResumeData;
         // Update experience-related fields

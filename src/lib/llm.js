@@ -431,12 +431,17 @@ ${candidateInfo ? `Candidate Context:
 - Skills: ${candidateInfo.skills?.join(', ') || 'Not provided'}
 ` : ''}
 
-Generate 3-5 engaging, relevant video screening questions that assess:
+Generate 3-5 engaging, relevant screening questions that assess ONLY technical and behavioral aspects:
 1. Technical skills and experience relevant to the role (especially fintech/payment systems)
 2. Problem-solving approach and critical thinking
 3. Communication abilities
-4. Cultural fit for Indian fintech environment and motivation
+4. Behavioral traits (teamwork, adaptability, leadership, work ethic)
 5. Real-world application of skills in Indian market context
+
+IMPORTANT: 
+- DO NOT include questions about notice period, compensation, salary, joining date, or availability
+- Focus ONLY on technical skills and behavioral assessment
+- These questions are for phone/video interviews, not for administrative details
 
 Question Guidelines:
 - Include questions about Indian fintech/payment systems (UPI, digital payments, payment gateways) if relevant
@@ -445,7 +450,8 @@ Question Guidelines:
 - Be clear and specific
 - Allow candidates to showcase their expertise
 - Have an appropriate time limit (60-180 seconds)
-- Be suitable for video response format
+- Be suitable for phone/video response format
+- Mix technical questions (60%) and behavioral questions (40%)
 
 Return a JSON object with this structure:
 {
