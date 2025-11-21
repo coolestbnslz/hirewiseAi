@@ -13,7 +13,7 @@ import { upload, uploadMultiple } from '../middleware/upload.js';
 import { v4 as uuidv4 } from 'uuid';
 import { fetchGitHubData, formatGitHubDataForLLM } from '../lib/github.js';
 import BatchResumeValidation from '../models/BatchResumeValidation.js';
-import { makeBlandAICall } from '../lib/blandAi.js';
+import { makeBlandAICall, getCallStatus } from '../lib/blandAi.js';
 import { formatPhoneNumber } from '../lib/phoneFormatter.js';
 
 const router = express.Router();
@@ -40,11 +40,15 @@ router.get('/job/:jobId', async (req, res) => {
     // Build query
     const query = { jobId };
 
-    // Filter by approval status if provided
+    // Filter by approval/rejection status if provided
     if (status === 'approved') {
       query.level1_approved = true;
+      query.rejected = false; // Approved applications are not rejected
     } else if (status === 'pending') {
       query.level1_approved = false;
+      query.rejected = false; // Pending applications are not rejected
+    } else if (status === 'rejected') {
+      query.rejected = true;
     }
 
     // Filter by minimum score if provided
@@ -114,6 +118,9 @@ router.get('/job/:jobId', async (req, res) => {
       status: {
         consentGiven: app.consent_given,
         level1Approved: app.level1_approved,
+        rejected: app.rejected || false,
+        rejectedAt: app.rejectedAt || null,
+        rejectionReason: app.rejectionReason || null,
       },
       matchInfo: app.matchId ? {
         matchId: app.matchId._id,
@@ -713,6 +720,12 @@ router.post('/:id/approve-level1', async (req, res) => {
     }
 
     application.level1_approved = true;
+    // If rejected, unset rejection (can't be both approved and rejected)
+    if (application.rejected) {
+      application.rejected = false;
+      application.rejectedAt = null;
+      application.rejectionReason = null;
+    }
     await application.save();
 
     const job = application.jobId;
@@ -729,73 +742,10 @@ router.post('/:id/approve-level1', async (req, res) => {
       await screening.save();
     }
 
-    // Auto-initiate phone interview if enabled and threshold met
+    // Auto-send email if enabled (original functionality) - Keep existing email logic
     if (job.settings.autoInviteOnLevel1Approval && 
         application.unifiedScore >= job.settings.autoInviteThreshold) {
       
-      // Initiate phone call via Bland AI (async - don't wait)
-      if (user.phone) {
-        // Generate questions first, then initiate call
-        (async () => {
-          try {
-            // Generate questions
-            const questionsResponse = await callLLM('SCREENING_QUESTIONS', {
-              job,
-              candidateInfo: {
-                name: user.name,
-                skills: application.skillsMatched || user.tags || [],
-              },
-            });
-            const parsed = parseJsonSafely(questionsResponse);
-            const questions = parsed.ok ? parsed.json.screening_questions : [];
-            
-            // Format phone number to E.164 format (required by Bland AI)
-            let phoneNumber;
-            try {
-              phoneNumber = formatPhoneNumber(user.phone, '91'); // Default to India (+91)
-            } catch (error) {
-              console.error(`[Application] Invalid phone number format for user ${user._id}:`, error.message);
-              throw new Error(`Invalid phone number format: ${error.message}`);
-            }
-            
-            // Initialize phone interview
-            screening.phoneInterview = {
-              status: 'initiated',
-              phoneNumber: phoneNumber,
-              startedAt: new Date(),
-            };
-            screening.screening_questions = questions;
-            await screening.save();
-            
-            // Make Bland AI call
-            const callResult = await makeBlandAICall({
-              phoneNumber: phoneNumber,
-              candidateName: user.name,
-              job,
-              application,
-              questions: questions,
-              screeningId: screening._id.toString(),
-            });
-            
-            // Update screening with call ID
-            screening.phoneInterview.callId = callResult.callId;
-            screening.phoneInterview.status = 'ringing';
-            await screening.save();
-            
-            console.log(`[Application] Phone call initiated for screening ${screening._id}, Call ID: ${callResult.callId}`);
-          } catch (error) {
-            console.error(`[Application] Error initiating phone call for screening ${screening._id}:`, error);
-            if (screening.phoneInterview) {
-              screening.phoneInterview.status = 'failed';
-              screening.phoneInterview.error = error.message;
-              await screening.save();
-            }
-          }
-        })();
-      }
-      
-      // Auto-send email if enabled (original functionality) - Keep existing email logic
-
       // Generate dynamic email based on candidate profile and scores
       const emailLLMResponse = await callLLM('EMAIL_GENERATOR', {
         candidateName: user.name,
@@ -867,12 +817,368 @@ router.post('/:id/approve-level1', async (req, res) => {
       application,
       emailSent: job.settings.autoInviteOnLevel1Approval && 
                  application.unifiedScore >= job.settings.autoInviteThreshold,
+      screeningId: screening._id,
+      scheduleCallUrl: `/api/applications/${application._id}/schedule-call`,
     });
   } catch (error) {
     console.error('Error approving application:', error);
     res.status(500).json({ error: 'Internal server error', details: error.message });
   }
 });
+
+// POST /api/applications/:id/schedule-call - Schedule/initiate phone interview via Bland AI with optional start_time
+router.post('/:id/schedule-call', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { start_time } = req.body; // Optional: "YYYY-MM-DD HH:MM:SS -HH:MM" format
+
+    const application = await Application.findById(id)
+      .populate('jobId')
+      .populate('userId');
+    
+    if (!application) {
+      return res.status(404).json({ error: 'Application not found' });
+    }
+
+    const job = application.jobId;
+    const user = application.userId;
+
+    if (!user || !user.phone) {
+      return res.status(400).json({ error: 'Candidate phone number not found' });
+    }
+
+    // Format phone number to E.164 format (required by Bland AI)
+    let phoneNumber;
+    try {
+      phoneNumber = formatPhoneNumber(user.phone, '91'); // Default to India (+91)
+    } catch (error) {
+      return res.status(400).json({ 
+        error: 'Invalid phone number format', 
+        details: error.message,
+        provided: user.phone 
+      });
+    }
+
+    // Get or generate screening questions (technical and behavioral only)
+    // Check if screening exists and has questions, otherwise generate
+    let screening = await Screening.findOne({ applicationId: application._id });
+    let questions = [];
+    
+    if (screening && screening.screening_questions && screening.screening_questions.length > 0) {
+      questions = screening.screening_questions;
+    } else {
+      // Generate questions on the spot
+      const questionsResponse = await callLLM('SCREENING_QUESTIONS', {
+        job,
+        candidateInfo: {
+          name: user.name,
+          skills: application.skillsMatched || user.tags || [],
+        },
+      });
+      const parsed = parseJsonSafely(questionsResponse);
+      questions = parsed.ok ? parsed.json.screening_questions : [];
+      
+      // Save questions to screening if it exists, otherwise create one
+      if (!screening) {
+        screening = new Screening({
+          applicationId: application._id,
+          jobId: job._id,
+          screening_link: `https://hirewise.app/screening/${uuidv4()}`,
+        });
+      }
+      screening.screening_questions = questions;
+      await screening.save();
+    }
+
+    // Initialize phone interview in Application model
+    if (!application.phoneInterview) {
+      application.phoneInterview = {};
+    }
+    application.phoneInterview.status = start_time ? 'scheduled' : 'initiated';
+    application.phoneInterview.phoneNumber = phoneNumber;
+    application.phoneInterview.startedAt = start_time ? null : new Date();
+    application.phoneInterview.scheduledStartTime = start_time || null;
+    await application.save();
+
+    // Make Bland AI call (with optional start_time for scheduling)
+    const callResult = await makeBlandAICall({
+      phoneNumber,
+      candidateName: user.name,
+      job,
+      application,
+      questions,
+      screeningId: application._id.toString(), // Use application ID for webhook
+      startTime: start_time || null,
+    });
+
+    // Update application with call ID
+    application.phoneInterview.callId = callResult.callId;
+    application.phoneInterview.status = start_time ? 'scheduled' : 'ringing';
+    if (start_time) {
+      application.phoneInterview.scheduledStartTime = start_time;
+    }
+    await application.save();
+
+    res.json({
+      message: start_time ? 'Phone interview call scheduled' : 'Phone interview call initiated',
+      callId: callResult.callId,
+      status: callResult.status,
+      phoneNumber: phoneNumber,
+      applicationId: application._id,
+      startTime: start_time || null,
+      checkStatusUrl: `/api/applications/${application._id}/phone-call-status`,
+    });
+  } catch (error) {
+    console.error('Error scheduling/initiating phone call:', error);
+    res.status(500).json({ error: 'Internal server error', details: error.message });
+  }
+});
+
+// GET /api/applications/:id/phone-call-status - Get phone call status
+router.get('/:id/phone-call-status', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const application = await Application.findById(id);
+
+    if (!application) {
+      return res.status(404).json({ error: 'Application not found' });
+    }
+
+    if (!application.phoneInterview || !application.phoneInterview.callId) {
+      return res.status(400).json({ error: 'No phone call initiated for this application' });
+    }
+
+    // Get latest status from Bland AI (including recording URL if available)
+    try {
+      const callStatus = await getCallStatus(application.phoneInterview.callId);
+      
+      // Update application with latest status
+      if (callStatus.status) {
+        application.phoneInterview.status = mapBlandStatusToInternal(callStatus.status);
+      }
+      
+      // Recording URL is available when call is completed
+      if (callStatus.recording_url) {
+        application.phoneInterview.recordingUrl = callStatus.recording_url;
+        console.log(`[Application] Recording URL retrieved: ${callStatus.recording_url}`);
+      }
+      
+      if (callStatus.transcript) {
+        application.phoneInterview.transcript = callStatus.transcript;
+      }
+      
+      if (callStatus.summary) {
+        application.phoneInterview.summary = callStatus.summary;
+      }
+      
+      if (callStatus.analysis) {
+        application.phoneInterview.analysis = callStatus.analysis;
+      }
+      
+      if (callStatus.duration) {
+        application.phoneInterview.duration = callStatus.duration;
+      }
+      
+      if (callStatus.status === 'completed' || callStatus.status === 'ended') {
+        application.phoneInterview.status = 'completed';
+        application.phoneInterview.completedAt = new Date();
+        
+        // If recording URL not in status, try to fetch it explicitly
+        if (!application.phoneInterview.recordingUrl) {
+          try {
+            const { getCallRecording } = await import('../lib/blandAi.js');
+            const recordingData = await getCallRecording(application.phoneInterview.callId);
+            if (recordingData.recordingUrl) {
+              application.phoneInterview.recordingUrl = recordingData.recordingUrl;
+              console.log(`[Application] Recording URL fetched explicitly: ${recordingData.recordingUrl}`);
+            }
+          } catch (recordingError) {
+            console.warn(`[Application] Could not fetch recording URL:`, recordingError.message);
+          }
+        }
+      }
+      
+      await application.save();
+    } catch (error) {
+      console.error('[Application] Error fetching call status from Bland AI:', error);
+      // Continue with stored status if API call fails
+    }
+
+    res.json({
+      applicationId: application._id,
+      phoneInterview: application.phoneInterview,
+    });
+  } catch (error) {
+    console.error('Error getting phone call status:', error);
+    res.status(500).json({ error: 'Internal server error', details: error.message });
+  }
+});
+
+// POST /api/applications/:id/webhook - Bland AI webhook for call updates
+router.post('/:id/webhook', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const webhookData = req.body;
+
+    console.log(`[Application] Webhook received for application ${id}:`, {
+      status: webhookData.status,
+      call_id: webhookData.call_id,
+      has_recording: !!webhookData.recording_url,
+    });
+
+    const application = await Application.findById(id);
+    
+    if (!application) {
+      console.error(`[Application] Webhook: Application ${id} not found`);
+      return res.status(404).send('Application not found');
+    }
+
+    // Update phone interview status from webhook data
+    if (!application.phoneInterview) {
+      application.phoneInterview = {};
+    }
+
+    // Map Bland AI status to internal status
+    if (webhookData.status) {
+      application.phoneInterview.status = mapBlandStatusToInternal(webhookData.status);
+    }
+    
+    // Update call ID if provided
+    if (webhookData.call_id) {
+      application.phoneInterview.callId = webhookData.call_id;
+    }
+    
+    // Get recording URL when call completes
+    if (webhookData.recording_url) {
+      application.phoneInterview.recordingUrl = webhookData.recording_url;
+      console.log(`[Application] Recording URL received: ${webhookData.recording_url}`);
+    }
+    
+    // Update transcript if available
+    if (webhookData.transcript) {
+      application.phoneInterview.transcript = webhookData.transcript;
+    }
+    
+    // Update summary if available
+    if (webhookData.summary) {
+      application.phoneInterview.summary = webhookData.summary;
+    }
+    
+    // Update analysis if available
+    if (webhookData.analysis) {
+      application.phoneInterview.analysis = webhookData.analysis;
+    }
+    
+    // Update duration if available
+    if (webhookData.duration) {
+      application.phoneInterview.duration = webhookData.duration;
+    }
+    
+    // When call is completed, fetch full details including recording
+    if (webhookData.status === 'completed' || webhookData.status === 'ended') {
+      application.phoneInterview.status = 'completed';
+      application.phoneInterview.completedAt = new Date();
+      
+      // Fetch full call details to ensure we have recording URL
+      if (webhookData.call_id) {
+        try {
+          const { getCallStatus } = await import('../lib/blandAi.js');
+          const fullCallData = await getCallStatus(webhookData.call_id);
+          
+          // Update with complete data
+          if (fullCallData.recording_url) {
+            application.phoneInterview.recordingUrl = fullCallData.recording_url;
+          }
+          if (fullCallData.transcript) {
+            application.phoneInterview.transcript = fullCallData.transcript;
+          }
+          if (fullCallData.summary) {
+            application.phoneInterview.summary = fullCallData.summary;
+          }
+          if (fullCallData.analysis) {
+            application.phoneInterview.analysis = fullCallData.analysis;
+          }
+          
+          console.log(`[Application] Full call data fetched for ${id}, recording: ${fullCallData.recording_url ? 'available' : 'not available'}`);
+        } catch (fetchError) {
+          console.error(`[Application] Error fetching full call data:`, fetchError);
+          // Continue with webhook data if fetch fails
+        }
+      }
+    }
+
+    await application.save();
+    console.log(`[Application] Webhook processed successfully for application ${id}`);
+
+    res.status(200).send('OK');
+  } catch (error) {
+    console.error('Error processing webhook:', error);
+    res.status(500).send('Error');
+  }
+});
+
+// POST /api/applications/:id/reject - Mark candidate as rejected for this job
+router.post('/:id/reject', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { rejectionReason } = req.body; // Optional rejection reason
+
+    const application = await Application.findById(id)
+      .populate('jobId')
+      .populate('userId');
+    
+    if (!application) {
+      return res.status(404).json({ error: 'Application not found' });
+    }
+
+    // Mark as rejected
+    application.rejected = true;
+    application.rejectedAt = new Date();
+    if (rejectionReason) {
+      application.rejectionReason = rejectionReason.trim();
+    }
+    
+    // If approved, unapprove it (can't be both approved and rejected)
+    if (application.level1_approved) {
+      application.level1_approved = false;
+    }
+    
+    await application.save();
+
+    res.json({
+      message: 'Candidate marked as rejected',
+      application: {
+        _id: application._id,
+        jobId: application.jobId._id,
+        userId: application.userId._id,
+        candidateName: application.userId.name,
+        jobRole: application.jobId.role,
+        rejected: application.rejected,
+        rejectedAt: application.rejectedAt,
+        rejectionReason: application.rejectionReason,
+      },
+    });
+  } catch (error) {
+    console.error('Error rejecting application:', error);
+    res.status(500).json({ error: 'Internal server error', details: error.message });
+  }
+});
+
+// Helper function to map Bland AI status to internal status
+function mapBlandStatusToInternal(blandStatus) {
+  const statusMap = {
+    'initiated': 'initiated',
+    'ringing': 'ringing',
+    'in-progress': 'in_progress',
+    'completed': 'completed',
+    'ended': 'completed',
+    'failed': 'failed',
+    'no-answer': 'no_answer',
+    'busy': 'failed',
+    'voicemail': 'no_answer',
+  };
+  return statusMap[blandStatus] || 'initiated';
+}
 
 // POST /api/applications/batch-validate/:jobId - Batch upload and validate up to 10 resumes
 router.post('/batch-validate/:jobId', uploadMultiple.array('resumes', 10), async (req, res) => {

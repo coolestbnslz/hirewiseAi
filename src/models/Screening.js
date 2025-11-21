@@ -46,11 +46,12 @@ const screeningSchema = new mongoose.Schema({
     callId: String, // Bland AI call ID
     status: {
       type: String,
-      enum: ['not_initiated', 'initiated', 'ringing', 'in_progress', 'completed', 'failed', 'no_answer'],
+      enum: ['not_initiated', 'initiated', 'scheduled', 'ringing', 'in_progress', 'completed', 'failed', 'no_answer'],
       default: 'not_initiated',
     },
     phoneNumber: String,
     startedAt: Date,
+    scheduledStartTime: String, // Scheduled start time in format "YYYY-MM-DD HH:MM:SS -HH:MM"
     completedAt: Date,
     duration: Number, // Duration in seconds
     recordingUrl: String,

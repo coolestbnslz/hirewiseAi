@@ -11,6 +11,131 @@ import { formatPhoneNumber } from '../lib/phoneFormatter.js';
 
 const router = express.Router();
 
+// GET /api/screenings/by-application/:applicationId - Get screening by application ID
+router.get('/by-application/:applicationId', async (req, res) => {
+  try {
+    const { applicationId } = req.params;
+    
+    const screening = await Screening.findOne({ applicationId })
+      .populate('applicationId')
+      .populate('jobId');
+    
+    if (!screening) {
+      return res.status(404).json({ error: 'Screening not found for this application' });
+    }
+
+    res.json({
+      screeningId: screening._id,
+      applicationId: screening.applicationId._id,
+      jobId: screening.jobId._id,
+      status: screening.phoneInterview?.status || 'not_initiated',
+      scheduledStartTime: screening.phoneInterview?.scheduledStartTime || null,
+      callId: screening.phoneInterview?.callId || null,
+      scheduleCallUrl: `/api/screenings/${screening._id}/schedule-call`,
+      scheduleCallByApplicationUrl: `/api/screenings/by-application/${applicationId}/schedule-call`,
+    });
+  } catch (error) {
+    console.error('Error fetching screening by application:', error);
+    res.status(500).json({ error: 'Internal server error', details: error.message });
+  }
+});
+
+// POST /api/screenings/by-application/:applicationId/schedule-call - Schedule call using application ID
+router.post('/by-application/:applicationId/schedule-call', async (req, res) => {
+  try {
+    const { applicationId } = req.params;
+    const { start_time } = req.body; // Optional: "YYYY-MM-DD HH:MM:SS -HH:MM" format
+
+    // Find screening by application ID
+    const screening = await Screening.findOne({ applicationId })
+      .populate('applicationId')
+      .populate('jobId');
+    
+    if (!screening) {
+      return res.status(404).json({ error: 'Screening not found for this application' });
+    }
+
+    const application = screening.applicationId;
+    const job = screening.jobId;
+    const user = await User.findById(application.userId);
+
+    if (!user || !user.phone) {
+      return res.status(400).json({ error: 'Candidate phone number not found' });
+    }
+
+    // Format phone number to E.164 format (required by Bland AI)
+    let phoneNumber;
+    try {
+      phoneNumber = formatPhoneNumber(user.phone, '91'); // Default to India (+91)
+    } catch (error) {
+      return res.status(400).json({ 
+        error: 'Invalid phone number format', 
+        details: error.message,
+        provided: user.phone 
+      });
+    }
+
+    // Get or generate screening questions (technical and behavioral only)
+    let questions = screening.screening_questions;
+    if (!questions || questions.length === 0) {
+      // Generate questions on the spot
+      const questionsResponse = await callLLM('SCREENING_QUESTIONS', {
+        job,
+        candidateInfo: {
+          name: user.name,
+          skills: application.skillsMatched || user.tags || [],
+        },
+      });
+      const parsed = parseJsonSafely(questionsResponse);
+      questions = parsed.ok ? parsed.json.screening_questions : [];
+      screening.screening_questions = questions;
+      await screening.save();
+    }
+
+    // Initialize phone interview
+    screening.phoneInterview = {
+      status: start_time ? 'scheduled' : 'initiated',
+      phoneNumber: phoneNumber,
+      startedAt: start_time ? null : new Date(),
+      scheduledStartTime: start_time || null,
+    };
+    await screening.save();
+
+    // Make Bland AI call (with optional start_time for scheduling)
+    const callResult = await makeBlandAICall({
+      phoneNumber,
+      candidateName: user.name,
+      job,
+      application,
+      questions,
+      screeningId: screening._id.toString(),
+      startTime: start_time || null,
+    });
+
+    // Update screening with call ID
+    screening.phoneInterview.callId = callResult.callId;
+    screening.phoneInterview.status = start_time ? 'scheduled' : 'ringing';
+    if (start_time) {
+      screening.phoneInterview.scheduledStartTime = start_time;
+    }
+    await screening.save();
+
+    res.json({
+      message: start_time ? 'Phone interview call scheduled' : 'Phone interview call initiated',
+      callId: callResult.callId,
+      status: callResult.status,
+      phoneNumber: phoneNumber,
+      screeningId: screening._id,
+      applicationId: application._id,
+      startTime: start_time || null,
+      checkStatusUrl: `/api/screenings/${screening._id}/phone-call-status`,
+    });
+  } catch (error) {
+    console.error('Error scheduling/initiating phone call:', error);
+    res.status(500).json({ error: 'Internal server error', details: error.message });
+  }
+});
+
 // GET /api/screenings/:id/questions - Get screening questions (generates on the spot if not set)
 router.get('/:id/questions', async (req, res) => {
   try {
@@ -216,7 +341,101 @@ router.post('/:id/process', async (req, res) => {
   }
 });
 
-// POST /api/screenings/:id/initiate-phone-call - Initiate phone interview via Bland AI
+// POST /api/screenings/:id/schedule-call - Schedule/initiate phone interview via Bland AI with optional start_time
+router.post('/:id/schedule-call', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { start_time } = req.body; // Optional: "YYYY-MM-DD HH:MM:SS -HH:MM" format
+
+    const screening = await Screening.findById(id)
+      .populate('applicationId')
+      .populate('jobId');
+    
+    if (!screening) {
+      return res.status(404).json({ error: 'Screening not found' });
+    }
+
+    const application = screening.applicationId;
+    const job = screening.jobId;
+    const user = await User.findById(application.userId);
+
+    if (!user || !user.phone) {
+      return res.status(400).json({ error: 'Candidate phone number not found' });
+    }
+
+    // Format phone number to E.164 format (required by Bland AI)
+    let phoneNumber;
+    try {
+      phoneNumber = formatPhoneNumber(user.phone, '91'); // Default to India (+91)
+    } catch (error) {
+      return res.status(400).json({ 
+        error: 'Invalid phone number format', 
+        details: error.message,
+        provided: user.phone 
+      });
+    }
+
+    // Get or generate screening questions (technical and behavioral only)
+    let questions = screening.screening_questions;
+    if (!questions || questions.length === 0) {
+      // Generate questions on the spot
+      const questionsResponse = await callLLM('SCREENING_QUESTIONS', {
+        job,
+        candidateInfo: {
+          name: user.name,
+          skills: application.skillsMatched || user.tags || [],
+        },
+      });
+      const parsed = parseJsonSafely(questionsResponse);
+      questions = parsed.ok ? parsed.json.screening_questions : [];
+      screening.screening_questions = questions;
+      await screening.save();
+    }
+
+    // Initialize phone interview
+    screening.phoneInterview = {
+      status: start_time ? 'scheduled' : 'initiated',
+      phoneNumber: phoneNumber,
+      startedAt: start_time ? null : new Date(),
+      scheduledStartTime: start_time || null,
+    };
+    await screening.save();
+
+    // Make Bland AI call (with optional start_time for scheduling)
+    const callResult = await makeBlandAICall({
+      phoneNumber,
+      candidateName: user.name,
+      job,
+      application,
+      questions,
+      screeningId: screening._id.toString(),
+      startTime: start_time || null,
+    });
+
+    // Update screening with call ID
+    screening.phoneInterview.callId = callResult.callId;
+    screening.phoneInterview.status = start_time ? 'scheduled' : 'ringing';
+    if (start_time) {
+      screening.phoneInterview.scheduledStartTime = start_time;
+    }
+    await screening.save();
+
+    res.json({
+      message: start_time ? 'Phone interview call scheduled' : 'Phone interview call initiated',
+      callId: callResult.callId,
+      status: callResult.status,
+      phoneNumber: phoneNumber,
+      screeningId: screening._id,
+      startTime: start_time || null,
+      checkStatusUrl: `/api/screenings/${screening._id}/phone-call-status`,
+    });
+  } catch (error) {
+    console.error('Error scheduling/initiating phone call:', error);
+    res.status(500).json({ error: 'Internal server error', details: error.message });
+  }
+});
+
+// POST /api/screenings/:id/initiate-phone-call - Initiate phone interview via Bland AI (immediate call, for backward compatibility)
 router.post('/:id/initiate-phone-call', async (req, res) => {
   try {
     const { id } = req.params;

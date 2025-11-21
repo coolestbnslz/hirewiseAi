@@ -2,6 +2,7 @@ import express from 'express';
 import fs from 'fs/promises';
 import path from 'path';
 import User from '../models/User.js';
+import CandidateSearch from '../models/CandidateSearch.js';
 import { callLLM } from '../lib/llm.js';
 import { parseJsonSafely } from '../lib/parseJsonSafely.js';
 import { fetchGitHubData, formatGitHubDataForLLM } from '../lib/github.js';
@@ -462,6 +463,23 @@ router.post('/search', async (req, res) => {
       return 0;
     });
 
+    // Create CandidateSearch record
+    const candidateSearch = new CandidateSearch({
+      searchText: query,
+      searchCriteria,
+      explanation,
+      totalResults,
+      resultsSnapshot: scoredResults.slice(0, 20).map(result => ({
+        userId: result.id,
+        matchScore: result.matchScore,
+        skillsMatched: result.skillsMatched,
+        recommendedAction: result.recommendedAction,
+      })),
+      shortlistedUsers: [],
+      rejectedUsers: [],
+    });
+    await candidateSearch.save();
+
     res.json({
       query,
       explanation,
@@ -469,6 +487,7 @@ router.post('/search', async (req, res) => {
       limit: parseInt(limit),
       skip: parseInt(skip),
       results: scoredResults,
+      searchId: candidateSearch._id, // Return search ID for future updates
     });
   } catch (error) {
     console.error('[CandidateSearch] Error searching candidates:', error);
@@ -476,6 +495,166 @@ router.post('/search', async (req, res) => {
       error: 'Internal server error', 
       details: error.message 
     });
+  }
+});
+
+// POST /api/users/search/:searchId/shortlist - Add user to shortlist for a search
+router.post('/search/:searchId/shortlist', async (req, res) => {
+  try {
+    const { searchId } = req.params;
+    const { userId } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({ error: 'userId is required' });
+    }
+
+    const candidateSearch = await CandidateSearch.findById(searchId);
+    if (!candidateSearch) {
+      return res.status(404).json({ error: 'Search not found' });
+    }
+
+    // Check if user exists
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Add to shortlist if not already there
+    if (!candidateSearch.shortlistedUsers.includes(userId)) {
+      candidateSearch.shortlistedUsers.push(userId);
+      
+      // Remove from rejected if present
+      candidateSearch.rejectedUsers = candidateSearch.rejectedUsers.filter(
+        id => id.toString() !== userId.toString()
+      );
+      
+      await candidateSearch.save();
+    }
+
+    res.json({
+      message: 'User added to shortlist',
+      searchId: candidateSearch._id,
+      shortlistedUsers: candidateSearch.shortlistedUsers,
+      rejectedUsers: candidateSearch.rejectedUsers,
+    });
+  } catch (error) {
+    console.error('Error adding user to shortlist:', error);
+    res.status(500).json({ error: 'Internal server error', details: error.message });
+  }
+});
+
+// POST /api/users/search/:searchId/reject - Add user to rejected list for a search
+router.post('/search/:searchId/reject', async (req, res) => {
+  try {
+    const { searchId } = req.params;
+    const { userId } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({ error: 'userId is required' });
+    }
+
+    const candidateSearch = await CandidateSearch.findById(searchId);
+    if (!candidateSearch) {
+      return res.status(404).json({ error: 'Search not found' });
+    }
+
+    // Check if user exists
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Add to rejected if not already there
+    if (!candidateSearch.rejectedUsers.includes(userId)) {
+      candidateSearch.rejectedUsers.push(userId);
+      
+      // Remove from shortlisted if present
+      candidateSearch.shortlistedUsers = candidateSearch.shortlistedUsers.filter(
+        id => id.toString() !== userId.toString()
+      );
+      
+      await candidateSearch.save();
+    }
+
+    res.json({
+      message: 'User added to rejected list',
+      searchId: candidateSearch._id,
+      shortlistedUsers: candidateSearch.shortlistedUsers,
+      rejectedUsers: candidateSearch.rejectedUsers,
+    });
+  } catch (error) {
+    console.error('Error adding user to rejected list:', error);
+    res.status(500).json({ error: 'Internal server error', details: error.message });
+  }
+});
+
+// GET /api/users/search/:searchId - Get search details with shortlisted and rejected users
+router.get('/search/:searchId', async (req, res) => {
+  try {
+    const { searchId } = req.params;
+
+    const candidateSearch = await CandidateSearch.findById(searchId)
+      .populate('shortlistedUsers', 'name email phone tags')
+      .populate('rejectedUsers', 'name email phone tags');
+
+    if (!candidateSearch) {
+      return res.status(404).json({ error: 'Search not found' });
+    }
+
+    res.json({
+      searchId: candidateSearch._id,
+      searchText: candidateSearch.searchText,
+      searchCriteria: candidateSearch.searchCriteria,
+      explanation: candidateSearch.explanation,
+      totalResults: candidateSearch.totalResults,
+      shortlistedUsers: candidateSearch.shortlistedUsers,
+      rejectedUsers: candidateSearch.rejectedUsers,
+      resultsSnapshot: candidateSearch.resultsSnapshot,
+      createdAt: candidateSearch.createdAt,
+      updatedAt: candidateSearch.updatedAt,
+    });
+  } catch (error) {
+    console.error('Error fetching search:', error);
+    res.status(500).json({ error: 'Internal server error', details: error.message });
+  }
+});
+
+// GET /api/users/searches - Get all searches (with pagination)
+router.get('/searches', async (req, res) => {
+  try {
+    const { limit = 50, page = 1, sortBy = 'createdAt', sortOrder = 'desc' } = req.query;
+
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const sort = {};
+    sort[sortBy] = sortOrder === 'asc' ? 1 : -1;
+
+    const searches = await CandidateSearch.find()
+      .populate('shortlistedUsers', 'name email')
+      .populate('rejectedUsers', 'name email')
+      .sort(sort)
+      .limit(parseInt(limit))
+      .skip(skip)
+      .lean();
+
+    const total = await CandidateSearch.countDocuments();
+
+    res.json({
+      total,
+      page: parseInt(page),
+      limit: parseInt(limit),
+      searches: searches.map(search => ({
+        searchId: search._id,
+        searchText: search.searchText,
+        totalResults: search.totalResults,
+        shortlistedCount: search.shortlistedUsers?.length || 0,
+        rejectedCount: search.rejectedUsers?.length || 0,
+        createdAt: search.createdAt,
+        updatedAt: search.updatedAt,
+      })),
+    });
+  } catch (error) {
+    console.error('Error fetching searches:', error);
+    res.status(500).json({ error: 'Internal server error', details: error.message });
   }
 });
 

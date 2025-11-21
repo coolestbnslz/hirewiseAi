@@ -19,9 +19,10 @@ const BLAND_API_URL = 'https://api.bland.ai/v1/calls';
  * @param {Object} params.application - Application details
  * @param {Array} params.questions - Technical and behavioral questions
  * @param {string} params.screeningId - Screening ID for tracking
+ * @param {string} params.startTime - Optional scheduled start time in format "YYYY-MM-DD HH:MM:SS -HH:MM" (e.g., "2021-01-01 12:00:00 -05:00")
  * @returns {Promise<Object>} Call response from Bland AI
  */
-export async function makeBlandAICall({ phoneNumber, candidateName, job, application, questions, screeningId }) {
+export async function makeBlandAICall({ phoneNumber, candidateName, job, application, questions, screeningId, startTime = null }) {
   try {
     if (!BLAND_API_KEY) {
       throw new Error('BLAND_API_KEY not configured. Please set BLAND_API_KEY in your .env file.');
@@ -68,8 +69,8 @@ export async function makeBlandAICall({ phoneNumber, candidateName, job, applica
         strengths: 'array of candidate strengths',
         concerns: 'array of any concerns or gaps',
       },
-      // Webhook for call status updates
-      webhook: `${webhookBaseUrl}/api/screenings/${screeningId}/webhook`,
+      // Webhook for call status updates (use application ID as screeningId is actually applicationId now)
+      webhook: `${webhookBaseUrl}/api/applications/${screeningId}/webhook`,
       // Metadata for tracking
       metadata: {
         screeningId: screeningId.toString(),
@@ -77,7 +78,20 @@ export async function makeBlandAICall({ phoneNumber, candidateName, job, applica
         jobId: job._id.toString(),
         candidateName: candidateName,
       },
+      voice: "bc97a31e-b0b8-49e5-bcb8-393fcc6a86ea"
     };
+
+    // Add start_time if provided (for scheduled calls)
+    // Format: "YYYY-MM-DD HH:MM:SS -HH:MM" (e.g., "2021-01-01 12:00:00 -05:00")
+    if (startTime) {
+      // Validate start_time format
+      const startTimeRegex = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [-\+]\d{2}:\d{2}$/;
+      if (!startTimeRegex.test(startTime)) {
+        throw new Error(`Invalid start_time format. Expected "YYYY-MM-DD HH:MM:SS -HH:MM" (e.g., "2021-01-01 12:00:00 -05:00"). Received: ${startTime}`);
+      }
+      payload.start_time = startTime;
+      console.log(`[BlandAI] Scheduling call for: ${startTime}`);
+    }
 
     console.log(`[BlandAI] Initiating call to ${phoneNumber} for screening ${screeningId}`);
 
