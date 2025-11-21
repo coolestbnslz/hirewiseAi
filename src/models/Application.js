@@ -100,6 +100,10 @@ const applicationSchema = new mongoose.Schema({
     recordingUrl: String,
     transcript: String,
     summary: String,
+    questions: [{ // Store questions used for the phone interview
+      text: String,
+      type: String,
+    }],
     analysis: {
       technical_skills: [String],
       behavioral_traits: [String],

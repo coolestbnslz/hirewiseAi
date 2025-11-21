@@ -18,11 +18,11 @@ const BLAND_API_URL = 'https://api.bland.ai/v1/calls';
  * @param {Object} params.job - Job details
  * @param {Object} params.application - Application details
  * @param {Array} params.questions - Technical and behavioral questions
- * @param {string} params.screeningId - Screening ID for tracking
+ * @param {string} params.applicationId - Application ID for tracking
  * @param {string} params.startTime - Optional scheduled start time in format "YYYY-MM-DD HH:MM:SS -HH:MM" (e.g., "2021-01-01 12:00:00 -05:00")
  * @returns {Promise<Object>} Call response from Bland AI
  */
-export async function makeBlandAICall({ phoneNumber, candidateName, job, application, questions, screeningId, startTime = null }) {
+export async function makeBlandAICall({ phoneNumber, candidateName, job, application, questions, applicationId, startTime = null }) {
   try {
     if (!BLAND_API_KEY) {
       throw new Error('BLAND_API_KEY not configured. Please set BLAND_API_KEY in your .env file.');
@@ -69,12 +69,11 @@ export async function makeBlandAICall({ phoneNumber, candidateName, job, applica
         strengths: 'array of candidate strengths',
         concerns: 'array of any concerns or gaps',
       },
-      // Webhook for call status updates (use application ID as screeningId is actually applicationId now)
-      webhook: `${webhookBaseUrl}/api/applications/${screeningId}/webhook`,
+      // Webhook for call status updates
+      webhook: `${webhookBaseUrl}/api/applications/${applicationId}/webhook`,
       // Metadata for tracking
       metadata: {
-        screeningId: screeningId.toString(),
-        applicationId: application._id.toString(),
+        applicationId: applicationId.toString(),
         jobId: job._id.toString(),
         candidateName: candidateName,
       },
@@ -93,7 +92,7 @@ export async function makeBlandAICall({ phoneNumber, candidateName, job, applica
       console.log(`[BlandAI] Scheduling call for: ${startTime}`);
     }
 
-    console.log(`[BlandAI] Initiating call to ${phoneNumber} for screening ${screeningId}`);
+    console.log(`[BlandAI] Initiating call to ${phoneNumber} for application ${applicationId}`);
 
     const response = await fetch(BLAND_API_URL, {
       method: 'POST',

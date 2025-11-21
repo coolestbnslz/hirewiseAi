@@ -2,7 +2,7 @@ import express from 'express';
 import Job from '../models/Job.js';
 import Application from '../models/Application.js';
 import User from '../models/User.js';
-import Screening from '../models/Screening.js';
+import Screening from '../models/Screening.js'; // Still used for video screenings
 import JobCandidateMatch from '../models/JobCandidateMatch.js';
 import { callLLM } from '../lib/llm.js';
 import { parseJsonSafely } from '../lib/parseJsonSafely.js';
@@ -759,8 +759,8 @@ router.post('/:id/approve-level1', async (req, res) => {
       application,
       emailSent: job.settings.autoInviteOnLevel1Approval && 
                  application.unifiedScore >= job.settings.autoInviteThreshold,
-      screeningId: screening._id,
-      scheduleCallUrl: `/api/applications/${application._id}/schedule-call`,
+      screeningId: screening._id, // For video screenings only
+      scheduleCallUrl: `/api/applications/${application._id}/schedule-call`, // Phone interview uses applicationId
     });
   } catch (error) {
     console.error('Error approving application:', error);
@@ -802,12 +802,11 @@ router.post('/:id/schedule-call', async (req, res) => {
     }
 
     // Get or generate screening questions (technical and behavioral only)
-    // Check if screening exists and has questions, otherwise generate
-    let screening = await Screening.findOne({ applicationId: application._id });
+    // Use questions from Application if already stored, otherwise generate
     let questions = [];
     
-    if (screening && screening.screening_questions && screening.screening_questions.length > 0) {
-      questions = screening.screening_questions;
+    if (application.phoneInterview && application.phoneInterview.questions && application.phoneInterview.questions.length > 0) {
+      questions = application.phoneInterview.questions;
     } else {
       // Generate questions on the spot
       const questionsResponse = await callLLM('SCREENING_QUESTIONS', {
@@ -819,17 +818,6 @@ router.post('/:id/schedule-call', async (req, res) => {
       });
       const parsed = parseJsonSafely(questionsResponse);
       questions = parsed.ok ? parsed.json.screening_questions : [];
-      
-      // Save questions to screening if it exists, otherwise create one
-      if (!screening) {
-        screening = new Screening({
-          applicationId: application._id,
-          jobId: job._id,
-          screening_link: `https://hirewise.app/screening/${uuidv4()}`,
-        });
-      }
-      screening.screening_questions = questions;
-      await screening.save();
     }
 
     // Initialize phone interview in Application model
@@ -840,6 +828,7 @@ router.post('/:id/schedule-call', async (req, res) => {
     application.phoneInterview.phoneNumber = phoneNumber;
     application.phoneInterview.startedAt = start_time ? null : new Date();
     application.phoneInterview.scheduledStartTime = start_time || null;
+    application.phoneInterview.questions = questions; // Store questions in Application
     await application.save();
 
     // Make Bland AI call (with optional start_time for scheduling)
