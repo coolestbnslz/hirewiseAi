@@ -59,14 +59,13 @@ AWS_BEARER_TOKEN_BEDROCK=your_bearer_token
 BEDROCK_MODEL_ID=us.anthropic.claude-3-5-haiku-20241022-v1:0
 BEDROCK_EMBEDDING_MODEL_ID=amazon.titan-embed-text-v1
 
-# SMTP Email Configuration
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
-SMTP_SECURE=false
-SMTP_USERNAME=your_email@gmail.com
-SMTP_PASSWORD=your_app_password
-SMTP_FROM_EMAIL=your_email@gmail.com
-SMTP_FROM_NAME=HireWise Team
+# Mailgun Email Configuration (Recommended for cloud deployments)
+MAILGUN_API_KEY=your_mailgun_api_key
+MAILGUN_DOMAIN=your_domain.mailgun.org  # e.g., sandbox810adcb22549480181c20abf661a1b84.mailgun.org
+MAILGUN_FROM_EMAIL=your_email@your_domain.com  # or use Mailgun sandbox domain
+MAILGUN_FROM_NAME=HireWise Team
+# For EU domains, use: MAILGUN_URL=https://api.eu.mailgun.net
+# Optional: MAILGUN_SKIP_VERIFY=true to skip connection verification
 
 # GitHub API Configuration (optional but recommended)
 GITHUB_TOKEN=your_github_personal_access_token
@@ -92,11 +91,16 @@ WEBHOOK_BASE_URL=https://yourdomain.com  # Base URL for webhooks (optional)
    - Enable Bedrock access (request access to Claude models and Titan Embeddings)
    - Create a Bearer token in AWS Console → Amazon Bedrock → API Keys
    - Set `AWS_BEARER_TOKEN_BEDROCK` in your `.env` file
-3. **Email (SMTP)**: 
-   - For Gmail: Enable 2FA and generate an App Password
-   - Set `SMTP_USERNAME` and `SMTP_PASSWORD`
-   - Update `SMTP_FROM_EMAIL` and `SMTP_FROM_NAME`
+3. **Email (Mailgun)**: 
+   - Sign up for a free Mailgun account at https://www.mailgun.com
+   - Get your API key from Mailgun Dashboard → Settings → API Keys
+   - Get your domain from Mailgun Dashboard (you can use the sandbox domain for testing)
+   - Set `MAILGUN_API_KEY` and `MAILGUN_DOMAIN` in your `.env` file
+   - Set `MAILGUN_FROM_EMAIL` (can use sandbox domain for testing)
+   - Set `MAILGUN_FROM_NAME` (optional)
+   - **For EU domains**: Set `MAILGUN_URL=https://api.eu.mailgun.net`
    - If not configured, the system will work but emails won't be sent
+   - **Note**: Mailgun is recommended for cloud deployments (Railway, Heroku, etc.) as it avoids SMTP port blocking issues
 4. **GitHub API (Optional but Recommended)**:
    - Create a GitHub Personal Access Token (PAT) with `public_repo` scope
    - Go to GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic)

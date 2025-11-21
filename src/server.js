@@ -49,22 +49,39 @@ async function startServer() {
   try {
     await connectDB();
     
-    // Verify email connection (non-blocking)
-    verifyEmailConnection().then(result => {
-      if (result.ok) {
-        console.log('[Server] ✅ Email service ready');
-      } else {
-        console.warn('[Server] ⚠️  Email service not configured');
-        // Only show detailed error if it's not just missing credentials
-        if (result.error && !result.error.includes('not configured')) {
-          console.warn('[Server] Error:', result.error);
+    // Verify email connection (non-blocking, with timeout)
+    // Skip verification in cloud environments if MAILGUN_SKIP_VERIFY is set
+    if (process.env.MAILGUN_SKIP_VERIFY !== 'true') {
+      const verifyPromise = verifyEmailConnection();
+      const timeoutPromise = new Promise((resolve) => 
+        setTimeout(() => resolve({ ok: false, error: 'Verification timeout (skipped)' }), 3000)
+      );
+      
+      Promise.race([verifyPromise, timeoutPromise]).then(result => {
+        if (result.ok) {
+          console.log('[Server] ✅ Email service ready');
         } else {
-          console.warn('[Server] Set SMTP_USERNAME and SMTP_PASSWORD in .env to enable email sending');
+          if (result.skipped) {
+            console.log('[Server] ℹ️  Email verification skipped');
+          } else {
+            console.warn('[Server] ⚠️  Email service not configured or connection failed');
+            // Only show detailed error if it's not just missing credentials
+            if (result.error && !result.error.includes('not configured') && !result.error.includes('timeout')) {
+              console.warn('[Server] Error:', result.error);
+            } else if (result.error && result.error.includes('timeout')) {
+              console.warn('[Server] Mailgun connection timeout. Set MAILGUN_SKIP_VERIFY=true to skip verification.');
+            } else {
+              console.warn('[Server] Set MAILGUN_API_KEY and MAILGUN_DOMAIN in .env to enable email sending');
+            }
+          }
         }
-      }
-    }).catch(err => {
-      console.warn('[Server] Email verification failed:', err.message);
-    });
+      }).catch(err => {
+        console.warn('[Server] Email verification error:', err.message);
+        console.warn('[Server] Email sending may still work. Set MAILGUN_SKIP_VERIFY=true to skip verification.');
+      });
+    } else {
+      console.log('[Server] ℹ️  Email verification skipped (MAILGUN_SKIP_VERIFY=true)');
+    }
     
     app.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);

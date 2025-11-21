@@ -458,6 +458,7 @@ router.post('/search', async (req, res) => {
           updatedAt: user.updatedAt,
           resumeSummary: user.resumeSummary,
           parsedResume: user.parsedResume,
+          userId: user._id,
           // Scoring information
           matchScore,
           skillsMatched,
