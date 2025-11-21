@@ -15,14 +15,16 @@ const BLAND_API_URL = 'https://api.bland.ai/v1/calls';
  * @param {Object} params - Call parameters
  * @param {string} params.phoneNumber - Candidate phone number (format: +91XXXXXXXXXX)
  * @param {string} params.candidateName - Candidate name
- * @param {Object} params.job - Job details
- * @param {Object} params.application - Application details
+ * @param {Object} [params.job] - Job details (optional - for generic calls without job)
+ * @param {Object} [params.application] - Application details (optional - for generic calls without application)
+ * @param {Object} [params.user] - User details (for generic calls without application)
  * @param {Array} params.questions - Technical and behavioral questions
- * @param {string} params.applicationId - Application ID for tracking
+ * @param {string} params.applicationId - Application ID for tracking (optional)
+ * @param {string} params.userId - User ID for tracking (optional, used when no application)
  * @param {string} params.startTime - Optional scheduled start time in format "YYYY-MM-DD HH:MM:SS -HH:MM" (e.g., "2021-01-01 12:00:00 -05:00")
  * @returns {Promise<Object>} Call response from Bland AI
  */
-export async function makeBlandAICall({ phoneNumber, candidateName, job, application, questions, applicationId, startTime = null }) {
+export async function makeBlandAICall({ phoneNumber, candidateName, job, application, user, questions, applicationId, userId, startTime = null }) {
   try {
     if (!BLAND_API_KEY) {
       throw new Error('BLAND_API_KEY not configured. Please set BLAND_API_KEY in your .env file.');
@@ -33,14 +35,20 @@ export async function makeBlandAICall({ phoneNumber, candidateName, job, applica
       throw new Error(`Phone number must be in E.164 format (e.g., +919876543210). Received: ${phoneNumber}`);
     }
 
-    // Build candidate summary from application data
-    const candidateSummary = buildCandidateSummary(application, job);
+    // Build candidate summary from application or user data
+    const candidateSummary = job && application 
+      ? buildCandidateSummary(application, job)
+      : buildGenericCandidateSummary(user);
     
-    // Build interview prompt with only technical and behavioral questions
-    const prompt = buildInterviewPrompt(candidateName, job, questions, candidateSummary);
+    // Build interview prompt (generic if no job, job-specific if job exists)
+    const prompt = job && application
+      ? buildInterviewPrompt(candidateName, job, questions, candidateSummary)
+      : buildGenericInterviewPrompt(candidateName, questions, candidateSummary);
     
-    // Build first sentence
-    const firstSentence = buildFirstSentence(candidateName, job.role, job.company_name);
+    // Build first sentence (generic if no job)
+    const firstSentence = job
+      ? buildFirstSentence(candidateName, job.role, job.company_name)
+      : buildGenericFirstSentence(candidateName);
     
     // Get webhook base URL from environment or use default
     const webhookBaseUrl = process.env.WEBHOOK_BASE_URL || 'http://localhost:3000';
@@ -69,12 +77,15 @@ export async function makeBlandAICall({ phoneNumber, candidateName, job, applica
         strengths: 'array of candidate strengths',
         concerns: 'array of any concerns or gaps',
       },
-      // Webhook for call status updates
-      webhook: `${webhookBaseUrl}/api/applications/${applicationId}/webhook`,
+      // Webhook for call status updates (use application webhook if available, otherwise user webhook)
+      webhook: applicationId 
+        ? `${webhookBaseUrl}/api/applications/${applicationId}/webhook`
+        : `${webhookBaseUrl}/api/users/${userId}/phone-call-webhook`,
       // Metadata for tracking
       metadata: {
-        applicationId: applicationId.toString(),
-        jobId: job._id.toString(),
+        ...(applicationId && { applicationId: applicationId.toString() }),
+        ...(userId && { userId: userId.toString() }),
+        ...(job && { jobId: job._id.toString() }),
         candidateName: candidateName,
       },
       voice: "bc97a31e-b0b8-49e5-bcb8-393fcc6a86ea"
@@ -92,7 +103,8 @@ export async function makeBlandAICall({ phoneNumber, candidateName, job, applica
       console.log(`[BlandAI] Scheduling call for: ${startTime}`);
     }
 
-    console.log(`[BlandAI] Initiating call to ${phoneNumber} for application ${applicationId}`);
+    const callContext = applicationId ? `application ${applicationId}` : `user ${userId}`;
+    console.log(`[BlandAI] Initiating call to ${phoneNumber} for ${callContext}`);
 
     const response = await fetch(BLAND_API_URL, {
       method: 'POST',
@@ -167,6 +179,19 @@ function buildCandidateSummary(application, job) {
 }
 
 /**
+ * Build generic candidate summary from user data (when no application/job)
+ */
+function buildGenericCandidateSummary(user) {
+  return {
+    name: user.name || 'Candidate',
+    skills: user.tags || [],
+    resumeSummary: user.resumeSummary || '',
+    experience: user.totalExperience || '',
+    currentCompany: user.currentCompany || '',
+  };
+}
+
+/**
  * Build interview prompt with technical and behavioral questions only
  */
 function buildInterviewPrompt(candidateName, job, questions, candidateSummary) {
@@ -222,10 +247,79 @@ IMPORTANT:
 }
 
 /**
+ * Build generic interview prompt (when no job/application - based on resume only)
+ */
+function buildGenericInterviewPrompt(candidateName, questions, candidateSummary) {
+  const questionsText = questions.map((q, index) => 
+    `Question ${index + 1}: ${q.text}`
+  ).join('\n\n');
+
+  return `You are Neo, an AI HR Representative conducting a general phone interview for Paytm (Indian fintech company).
+
+IMPORTANT INSTRUCTIONS:
+- Always let the candidate finish their sentence before speaking
+- Acknowledge candidate answers with words like "okay, great!", "okay", "got it", "understood"
+- Ask all main questions in order
+- Only ask follow-up questions if needed for clarification
+- Be natural and conversational
+- Use Indian English conventions
+- Be patient and professional
+
+CANDIDATE INFORMATION:
+- Name: ${candidateName}
+- Skills from Resume: ${candidateSummary.skills.join(', ') || 'Not specified'}
+${candidateSummary.experience ? `- Experience: ${candidateSummary.experience}` : ''}
+${candidateSummary.currentCompany ? `- Current Company: ${candidateSummary.currentCompany}` : ''}
+${candidateSummary.resumeSummary ? `- Resume Summary: ${candidateSummary.resumeSummary.substring(0, 200)}` : ''}
+
+INTERVIEW FLOW:
+
+1. After your first sentence, if the candidate says they have time, continue with the interview. If they say no or don't have time, say "Okay no worries, you can schedule a call later. Thank you for your time. You can hang up the call." and end the conversation.
+
+2. Ask the following technical and behavioral questions in order (these are based on the candidate's resume):
+
+${questionsText}
+
+3. For each question:
+   - Listen to the complete answer
+   - Acknowledge with "okay" or "got it"
+   - Ask natural follow-up questions only if the answer needs clarification
+   - Move to the next question after getting a satisfactory answer
+
+4. After asking all questions, summarize what you've gathered:
+   - "Let me quickly summarize what we discussed..."
+   - Mention key technical skills and behavioral traits they demonstrated
+
+5. End the call professionally:
+   - "That's it from my side. Thank you for your time and for taking this call. We'll review your interview and get back to you if we decide to move ahead. You can hang up the call now."
+
+IMPORTANT:
+- NEVER hang up the call without the candidate's permission
+- Focus on technical skills and behavioral assessment based on their resume
+- Do NOT ask about notice period, compensation, or joining date (those are handled separately)
+- Keep the conversation natural and engaging
+- If the candidate asks questions, answer them briefly and professionally
+- Since there's no specific job role, focus on understanding their general technical capabilities and behavioral traits`;
+}
+
+/**
  * Build first sentence for the call
  */
 function buildFirstSentence(candidateName, jobRole, companyName) {
   return `Hey ${candidateName}... I am Neo, an AI HR Representative calling from ${companyName || 'Paytm'}. It's the company with the yellow light house logo? You recently applied for a ${jobRole} role at the company. Just wanted to talk about that.
+
+...Yes...i know... i know. I am an actual AI...it's a lil weird.
+
+I'm still experimental... I might take a few seconds to respond, the call might get dropped, I might talk over you & so on...
+
+Please try to be patient & talk slightly faster than usual, with fewer pauses but, this will only take about 5-10 minutes, is this a good time to talk?`;
+}
+
+/**
+ * Build generic first sentence (when no job/application)
+ */
+function buildGenericFirstSentence(candidateName) {
+  return `Hey ${candidateName}... I am Neo, an AI HR Representative calling from Paytm. It's the company with the yellow light house logo? We came across your profile and would like to have a quick conversation with you.
 
 ...Yes...i know... i know. I am an actual AI...it's a lil weird.
 

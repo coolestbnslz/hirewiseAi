@@ -74,6 +74,40 @@ const userSchema = new mongoose.Schema({
   lastJobSwitchDate: {
     type: String, // YYYY-MM format
   },
+  // Phone interview summaries (for users without applications, e.g., from AI search)
+  phoneInterviewSummaries: [{
+    callId: String, // Bland AI call ID
+    status: {
+      type: String,
+      enum: ['not_initiated', 'initiated', 'scheduled', 'ringing', 'in_progress', 'completed', 'failed', 'no_answer'],
+      default: 'not_initiated',
+    },
+    phoneNumber: String,
+    startedAt: Date,
+    scheduledStartTime: String, // Scheduled start time in format "YYYY-MM-DD HH:MM:SS -HH:MM"
+    completedAt: Date,
+    duration: Number, // Duration in seconds
+    recordingUrl: String,
+    transcript: String,
+    summary: String,
+    questions: [{
+      text: String,
+      type: String,
+    }],
+    analysis: {
+      technical_skills: [String],
+      behavioral_traits: [String],
+      communication_quality: Number,
+      overall_fit: Number,
+      strengths: [String],
+      concerns: [String],
+    },
+    error: String,
+    createdAt: {
+      type: Date,
+      default: Date.now,
+    },
+  }],
 }, {
   timestamps: true,
 });

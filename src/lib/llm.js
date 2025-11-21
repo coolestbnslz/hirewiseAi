@@ -411,8 +411,57 @@ Return ONLY valid JSON, no additional text.`;
  * Build prompt for generating screening questions on the spot
  */
 function buildScreeningQuestionsPrompt(payload) {
-  const { job, candidateInfo } = payload;
+  const { job, candidateInfo, resumeText } = payload;
 
+  // If no job provided, generate generic questions based on resume only
+  if (!job && resumeText) {
+    return `You are an expert interviewer creating phone interview questions for a candidate at Paytm (Indian fintech company).
+
+Candidate Resume:
+${resumeText.substring(0, 2000)}${resumeText.length > 2000 ? '...' : ''}
+
+${candidateInfo ? `Candidate Context:
+- Name: ${candidateInfo.name || 'Not provided'}
+- Skills: ${candidateInfo.skills?.join(', ') || 'Not provided'}
+` : ''}
+
+Generate 3-5 engaging, relevant phone interview questions based ONLY on the candidate's resume:
+1. Technical skills mentioned in their resume
+2. Experience and projects they've worked on
+3. Problem-solving approach based on their background
+4. Communication abilities
+5. Behavioral traits relevant to their experience
+
+IMPORTANT: 
+- DO NOT include questions about notice period, compensation, salary, joining date, or availability
+- Focus ONLY on technical skills and behavioral assessment
+- Base questions ONLY on what's in the resume - do not make assumptions
+- These questions are for phone interviews, not for administrative details
+- Since there's no specific job role, focus on understanding their general capabilities
+
+Question Guidelines:
+- Extract specific technologies, frameworks, or tools mentioned in the resume
+- Ask about projects or experiences mentioned in the resume
+- Consider Indian market context if relevant
+- Use Indian English conventions
+- Be clear and specific
+- Allow candidates to showcase their expertise
+- Be suitable for phone conversation format
+- Mix technical questions (60%) and behavioral questions (40%)
+
+Return a JSON object with this structure:
+{
+  "screening_questions": [
+    {"text": "Question 1 text (based on resume content)", "type": "phone"},
+    {"text": "Question 2 text", "type": "phone"},
+    {"text": "Question 3 text", "type": "phone"}
+  ]
+}
+
+Return ONLY valid JSON, no additional text.`;
+  }
+
+  // Original job-based prompt
   return `You are an expert interviewer creating video screening questions for a job position at Paytm (Indian fintech company).
 
 Job Details:
