@@ -6,6 +6,10 @@ import CandidateSearch from '../models/CandidateSearch.js';
 import { callLLM } from '../lib/llm.js';
 import { parseJsonSafely } from '../lib/parseJsonSafely.js';
 import { fetchGitHubData, formatGitHubDataForLLM } from '../lib/github.js';
+import { makeBlandAICall, getCallStatus } from '../lib/blandAi.js';
+import { formatPhoneNumber } from '../lib/phoneFormatter.js';
+import { sendEmail } from '../lib/email.js';
+import { readFileAsText } from '../lib/storage.js';
 
 const router = express.Router();
 
@@ -89,6 +93,406 @@ router.get('/:id/resume', async (req, res) => {
   } catch (error) {
     console.error('Error downloading resume:', error);
     res.status(500).json({ error: 'Internal server error', details: error.message });
+  }
+});
+
+// POST /api/users/:userId/schedule-call - Schedule phone interview for a user (without application)
+// This is for users found through AI search who don't have an application yet
+router.post('/:userId/schedule-call', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { start_time } = req.body; // Optional: "YYYY-MM-DD HH:MM:SS -HH:MM" format
+
+    const user = await User.findById(userId);
+    
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (!user.phone) {
+      return res.status(400).json({ error: 'Candidate phone number not found' });
+    }
+
+    // Format phone number to E.164 format (required by Bland AI)
+    let phoneNumber;
+    try {
+      phoneNumber = formatPhoneNumber(user.phone, '91'); // Default to India (+91)
+    } catch (error) {
+      return res.status(400).json({ 
+        error: 'Invalid phone number format', 
+        details: error.message,
+        provided: user.phone 
+      });
+    }
+
+    // Generate questions based on resume only (no job context)
+    let questions = [];
+    
+    // Check if user has stored questions from a previous call
+    if (user.phoneInterviewSummaries && user.phoneInterviewSummaries.length > 0) {
+      const lastCall = user.phoneInterviewSummaries[user.phoneInterviewSummaries.length - 1];
+      if (lastCall.questions && lastCall.questions.length > 0) {
+        questions = lastCall.questions;
+      }
+    }
+
+    // If no stored questions, generate based on resume
+    if (questions.length === 0) {
+      if (!user.resumeText || user.resumeText.trim().length === 0) {
+        return res.status(400).json({ 
+          error: 'Resume text not available. Cannot generate interview questions without resume.' 
+        });
+      }
+
+      // Generate questions based on resume only (no job)
+      const questionsResponse = await callLLM('SCREENING_QUESTIONS', {
+        candidateInfo: {
+          name: user.name,
+          skills: user.tags || [],
+        },
+        resumeText: user.resumeText, // Pass resume text for generic questions
+      });
+      const parsed = parseJsonSafely(questionsResponse);
+      questions = parsed.ok ? parsed.json.screening_questions : [];
+    }
+
+    // Create new phone interview summary entry
+    const phoneInterviewSummary = {
+      status: start_time ? 'scheduled' : 'initiated',
+      phoneNumber: phoneNumber,
+      startedAt: start_time ? null : new Date(),
+      scheduledStartTime: start_time || null,
+      questions: questions,
+    };
+
+    // Add to user's phone interview summaries array
+    if (!user.phoneInterviewSummaries) {
+      user.phoneInterviewSummaries = [];
+    }
+    user.phoneInterviewSummaries.push(phoneInterviewSummary);
+    await user.save();
+
+    // Make Bland AI call (with optional start_time for scheduling)
+    const callResult = await makeBlandAICall({
+      phoneNumber,
+      candidateName: user.name,
+      user: user, // Pass user instead of application
+      questions,
+      userId: user._id.toString(),
+      startTime: start_time || null,
+    });
+
+    // Update the last phone interview summary with call ID
+    const lastSummary = user.phoneInterviewSummaries[user.phoneInterviewSummaries.length - 1];
+    lastSummary.callId = callResult.callId;
+    lastSummary.status = start_time ? 'scheduled' : 'ringing';
+    if (start_time) {
+      lastSummary.scheduledStartTime = start_time;
+    }
+    await user.save();
+
+    // Send email notification about the phone interview (async - don't wait)
+    if (user.email) {
+      (async () => {
+        try {
+          // Generate email content using LLM (generic, no job context)
+          const emailLLMResponse = await callLLM('PHONE_INTERVIEW_EMAIL', {
+            candidateName: user.name,
+            role: 'Potential Role', // Generic since no specific job
+            company: 'Paytm',
+            phoneNumber: phoneNumber,
+            scheduledStartTime: start_time,
+            questions: questions,
+          });
+
+          const emailParsed = parseJsonSafely(emailLLMResponse);
+          
+          if (emailParsed.ok) {
+            const emailData = emailParsed.json;
+            
+            // Send email
+            const emailResult = await sendEmail({
+              to: user.email,
+              subject: emailData.subject || `Phone Interview Invitation - Paytm`,
+              html: emailData.html_snippet || emailData.plain_text,
+              text: emailData.plain_text || emailData.html_snippet?.replace(/<[^>]*>/g, ''),
+            });
+
+            if (emailResult.ok) {
+              console.log(`[User] Phone interview email sent to ${user.email} for user ${user._id}`);
+            } else {
+              console.error(`[User] Failed to send phone interview email:`, emailResult.error);
+            }
+          } else {
+            console.error('[User] Failed to parse phone interview email response:', emailParsed.error);
+            // Fallback email
+            const fallbackSubject = start_time 
+              ? `Phone Interview Scheduled - Paytm`
+              : `Phone Interview Invitation - Paytm`;
+            
+            const fallbackHtml = `
+              <h2>Hello ${user.name},</h2>
+              <p>Congratulations! We came across your profile and would like to have a conversation with you.</p>
+              <p>We would like to invite you for an AI-based phone interview.</p>
+              ${start_time ? `<p><strong>Scheduled Time:</strong> ${start_time}</p>` : '<p>You will receive a call shortly at: <strong>' + phoneNumber + '</strong></p>'}
+              <p><strong>What to expect:</strong></p>
+              <ul>
+                <li>An AI interviewer named "Neo" will call you</li>
+                <li>The interview will take approximately 5-10 minutes</li>
+                <li>You'll be asked technical and behavioral questions based on your resume</li>
+                <li>Please answer naturally and be patient if there are brief pauses</li>
+              </ul>
+              <p>We look forward to speaking with you!</p>
+              <p>Best regards,<br>Paytm HR Team</p>
+            `;
+            
+            await sendEmail({
+              to: user.email,
+              subject: fallbackSubject,
+              html: fallbackHtml,
+              text: fallbackHtml.replace(/<[^>]*>/g, ''),
+            });
+          }
+        } catch (error) {
+          console.error(`[User] Error sending phone interview email:`, error);
+        }
+      })();
+    }
+
+    res.json({
+      message: start_time ? 'Phone interview call scheduled' : 'Phone interview call initiated',
+      callId: callResult.callId,
+      status: callResult.status,
+      phoneNumber: phoneNumber,
+      userId: user._id,
+      startTime: start_time || null,
+      emailSent: user.email ? true : false,
+      checkStatusUrl: `/api/users/${user._id}/phone-call-status`,
+    });
+  } catch (error) {
+    console.error('Error scheduling/initiating phone call:', error);
+    res.status(500).json({ error: 'Internal server error', details: error.message });
+  }
+});
+
+// GET /api/users/:userId/phone-call-status - Get phone call status for a user
+router.get('/:userId/phone-call-status', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const user = await User.findById(userId);
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (!user.phoneInterviewSummaries || user.phoneInterviewSummaries.length === 0) {
+      return res.status(404).json({ error: 'No phone interviews found for this user' });
+    }
+
+    // Get the most recent phone interview
+    const lastInterview = user.phoneInterviewSummaries[user.phoneInterviewSummaries.length - 1];
+
+    if (!lastInterview.callId) {
+      return res.status(400).json({ error: 'No phone call initiated for this user' });
+    }
+
+    // Helper function to map Bland AI status to internal status
+    function mapBlandStatusToInternal(blandStatus) {
+      const statusMap = {
+        'initiated': 'initiated',
+        'ringing': 'ringing',
+        'answered': 'in_progress',
+        'in-progress': 'in_progress',
+        'completed': 'completed',
+        'ended': 'completed',
+        'failed': 'failed',
+        'no-answer': 'no_answer',
+        'busy': 'failed',
+        'voicemail': 'failed',
+      };
+      return statusMap[blandStatus] || 'in_progress';
+    }
+
+    // Get latest status from Bland AI (including recording URL if available)
+    try {
+      const callStatus = await getCallStatus(lastInterview.callId);
+      
+      // Update user's phone interview summary with latest status
+      if (callStatus.status) {
+        lastInterview.status = mapBlandStatusToInternal(callStatus.status);
+      }
+      
+      if (callStatus.recording_url) {
+        lastInterview.recordingUrl = callStatus.recording_url;
+        console.log(`[User] Recording URL retrieved: ${callStatus.recording_url}`);
+      }
+      
+      if (callStatus.transcript) {
+        lastInterview.transcript = callStatus.transcript;
+      }
+      
+      if (callStatus.summary) {
+        lastInterview.summary = callStatus.summary;
+      }
+      
+      if (callStatus.analysis) {
+        lastInterview.analysis = callStatus.analysis;
+      }
+      
+      if (callStatus.duration) {
+        lastInterview.duration = callStatus.duration;
+      }
+      
+      if (callStatus.status === 'completed' || callStatus.status === 'ended') {
+        lastInterview.status = 'completed';
+        lastInterview.completedAt = new Date();
+        
+        // If recording URL not in status, try to fetch it explicitly
+        if (!lastInterview.recordingUrl) {
+          try {
+            const { getCallRecording } = await import('../lib/blandAi.js');
+            const recordingData = await getCallRecording(lastInterview.callId);
+            if (recordingData.recordingUrl) {
+              lastInterview.recordingUrl = recordingData.recordingUrl;
+              console.log(`[User] Recording URL fetched explicitly: ${recordingData.recordingUrl}`);
+            }
+          } catch (recordingError) {
+            console.warn(`[User] Could not fetch recording URL:`, recordingError.message);
+          }
+        }
+      }
+      
+      await user.save();
+    } catch (error) {
+      console.error('[User] Error fetching call status from Bland AI:', error);
+      // Return stored status even if fetch fails
+    }
+
+    res.json({
+      userId: user._id,
+      phoneInterview: lastInterview,
+      totalInterviews: user.phoneInterviewSummaries.length,
+    });
+  } catch (error) {
+    console.error('Error getting phone call status:', error);
+    res.status(500).json({ error: 'Internal server error', details: error.message });
+  }
+});
+
+// POST /api/users/:userId/phone-call-webhook - Webhook handler for user-based phone calls (from Bland AI)
+router.post('/:userId/phone-call-webhook', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const webhookData = req.body;
+
+    console.log(`[User] Webhook received for user ${userId}:`, JSON.stringify(webhookData, null, 2));
+
+    const user = await User.findById(userId);
+    if (!user) {
+      console.error(`[User] User ${userId} not found for webhook`);
+      return res.status(404).send('User not found');
+    }
+
+    // Get the most recent phone interview summary
+    if (!user.phoneInterviewSummaries || user.phoneInterviewSummaries.length === 0) {
+      console.error(`[User] No phone interview summaries found for user ${userId}`);
+      return res.status(400).send('No phone interview found');
+    }
+
+    const lastInterview = user.phoneInterviewSummaries[user.phoneInterviewSummaries.length - 1];
+
+    // Helper function to map Bland AI status to internal status
+    function mapBlandStatusToInternal(blandStatus) {
+      const statusMap = {
+        'initiated': 'initiated',
+        'ringing': 'ringing',
+        'answered': 'in_progress',
+        'in-progress': 'in_progress',
+        'completed': 'completed',
+        'ended': 'completed',
+        'failed': 'failed',
+        'no-answer': 'no_answer',
+        'busy': 'failed',
+        'voicemail': 'failed',
+      };
+      return statusMap[blandStatus] || 'in_progress';
+    }
+
+    // Map Bland AI status to internal status
+    if (webhookData.status) {
+      lastInterview.status = mapBlandStatusToInternal(webhookData.status);
+    }
+    
+    // Update call ID if provided
+    if (webhookData.call_id) {
+      lastInterview.callId = webhookData.call_id;
+    }
+    
+    // Get recording URL when call completes
+    if (webhookData.recording_url) {
+      lastInterview.recordingUrl = webhookData.recording_url;
+      console.log(`[User] Recording URL received: ${webhookData.recording_url}`);
+    }
+    
+    // Update transcript if available
+    if (webhookData.transcript) {
+      lastInterview.transcript = webhookData.transcript;
+    }
+    
+    // Update summary if available
+    if (webhookData.summary) {
+      lastInterview.summary = webhookData.summary;
+    }
+    
+    // Update analysis if available
+    if (webhookData.analysis) {
+      lastInterview.analysis = webhookData.analysis;
+    }
+    
+    // Update duration if available
+    if (webhookData.duration) {
+      lastInterview.duration = webhookData.duration;
+    }
+    
+    // When call is completed, fetch full details including recording
+    if (webhookData.status === 'completed' || webhookData.status === 'ended') {
+      lastInterview.status = 'completed';
+      lastInterview.completedAt = new Date();
+      
+      // Fetch full call details to ensure we have recording URL
+      if (webhookData.call_id) {
+        try {
+          const { getCallStatus } = await import('../lib/blandAi.js');
+          const fullCallData = await getCallStatus(webhookData.call_id);
+          
+          // Update with complete data
+          if (fullCallData.recording_url) {
+            lastInterview.recordingUrl = fullCallData.recording_url;
+          }
+          if (fullCallData.transcript) {
+            lastInterview.transcript = fullCallData.transcript;
+          }
+          if (fullCallData.summary) {
+            lastInterview.summary = fullCallData.summary;
+          }
+          if (fullCallData.analysis) {
+            lastInterview.analysis = fullCallData.analysis;
+          }
+          
+          console.log(`[User] Full call data fetched for user ${userId}, recording: ${fullCallData.recording_url ? 'available' : 'not available'}`);
+        } catch (fetchError) {
+          console.error(`[User] Error fetching full call data:`, fetchError);
+        }
+      }
+    }
+
+    await user.save();
+    console.log(`[User] Webhook processed successfully for user ${userId}`);
+
+    res.status(200).send('OK');
+  } catch (error) {
+    console.error('Error processing webhook:', error);
+    res.status(500).send('Error');
   }
 });
 
@@ -458,7 +862,6 @@ router.post('/search', async (req, res) => {
           updatedAt: user.updatedAt,
           resumeSummary: user.resumeSummary,
           parsedResume: user.parsedResume,
-          userId: user._id,
           // Scoring information
           matchScore,
           skillsMatched,

@@ -83,27 +83,29 @@ router.get('/job/:jobId', async (req, res) => {
     // Get total count for pagination
     const total = await Application.countDocuments(query);
 
-    // Format response
-    const formattedApplications = applications.map(app => ({
-      applicationId: app._id,
-      userId: app.userId._id,
-      candidate: {
-        name: app.userId.name,
-        email: app.userId.email,
-        phone: app.userId.phone,
-        githubUrl: app.userId.githubUrl,
-        portfolioUrl: app.userId.portfolioUrl,
-        linkedinUrl: app.userId.linkedinUrl,
-        compensationExpectation: app.userId.compensationExpectation,
-        tags: app.userId.tags || [],
-        parsedResume: app.userId.parsedResume || null,
-        resumeSummary: app.userId.resumeSummary || null,
-        currentTenure: app.userId.currentTenure || null,
-        totalExperience: app.userId.totalExperience || null,
-        isRecentSwitcher: app.userId.isRecentSwitcher || false,
-        currentCompany: app.userId.currentCompany || null,
-        lastJobSwitchDate: app.userId.lastJobSwitchDate || null,
-      },
+    // Format response (filter out applications with null userId)
+    const formattedApplications = applications
+      .filter(app => app.userId !== null && app.userId !== undefined) // Filter out null users
+      .map(app => ({
+        applicationId: app._id,
+        userId: app.userId?._id || null,
+        candidate: {
+          name: app.userId?.name || 'Unknown',
+          email: app.userId?.email || null,
+          phone: app.userId?.phone || null,
+          githubUrl: app.userId?.githubUrl || null,
+          portfolioUrl: app.userId?.portfolioUrl || null,
+          linkedinUrl: app.userId?.linkedinUrl || null,
+          compensationExpectation: app.userId?.compensationExpectation || null,
+          tags: app.userId?.tags || [],
+          parsedResume: app.userId?.parsedResume || null,
+          resumeSummary: app.userId?.resumeSummary || null,
+          currentTenure: app.userId?.currentTenure || null,
+          totalExperience: app.userId?.totalExperience || null,
+          isRecentSwitcher: app.userId?.isRecentSwitcher || false,
+          currentCompany: app.userId?.currentCompany || null,
+          lastJobSwitchDate: app.userId?.lastJobSwitchDate || null,
+        },
       skillsMatched: app.skillsMatched || [],
       skillsMissing: app.skillsMissing || [],
       topReasons: app.topReasons || [],
@@ -123,9 +125,9 @@ router.get('/job/:jobId', async (req, res) => {
         rejectionReason: app.rejectionReason || null,
       },
       matchInfo: app.matchId ? {
-        matchId: app.matchId._id,
-        matchScore: app.matchId.matchScore,
-        status: app.matchId.status,
+        matchId: app.matchId?._id || null,
+        matchScore: app.matchId?.matchScore || null,
+        status: app.matchId?.status || null,
       } : null,
       createdAt: app.createdAt,
       updatedAt: app.updatedAt,
@@ -838,7 +840,7 @@ router.post('/:id/schedule-call', async (req, res) => {
       job,
       application,
       questions,
-      screeningId: application._id.toString(), // Use application ID for webhook
+      applicationId: application._id.toString(), // Use application ID for webhook
       startTime: start_time || null,
     });
 
