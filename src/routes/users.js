@@ -18,97 +18,115 @@ router.get('/:id/resume', async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    if (!user.resumePath) {
+    // Prefer S3 URL if available, otherwise use resumePath
+    const resumeLocation = user.resumeS3Url || user.resumePath;
+    
+    if (!resumeLocation) {
       return res.status(404).json({ error: 'Resume not found for this user' });
     }
 
-    // Check if file exists
-    try {
-      await fs.access(user.resumePath);
-    } catch (error) {
-      console.error(`[User] Resume file not found at path: ${user.resumePath}`, error);
-      return res.status(404).json({ error: 'Resume file not found on server' });
+    // Check if it's an S3 URL
+    const isS3Url = resumeLocation && resumeLocation.startsWith('https://') && resumeLocation.includes('.s3.');
+    
+    if (isS3Url) {
+      // Generate presigned URL for S3 file
+      try {
+        const { getPresignedUrl } = await import('../lib/storage.js');
+        const expiresIn = parseInt(req.query.expiresIn) || 3600; // Default 1 hour, can be overridden via query param
+        const presignedUrl = await getPresignedUrl(resumeLocation, expiresIn);
+        
+        // Return presigned URL in response
+        return res.json({
+          downloadUrl: presignedUrl,
+          expiresIn: expiresIn,
+          message: 'Use the downloadUrl to download the resume. URL expires in ' + expiresIn + ' seconds.',
+        });
+      } catch (error) {
+        console.error('[User] Error generating presigned URL:', error);
+        return res.status(500).json({ 
+          error: 'Failed to generate download URL', 
+          details: error.message 
+        });
+      }
+    } else {
+      // Local file path
+      // Check if file exists
+      try {
+        await fs.access(resumeLocation);
+      } catch (error) {
+        console.error(`[User] Resume file not found at path: ${resumeLocation}`, error);
+        return res.status(404).json({ error: 'Resume file not found on server' });
+      }
+
+      // Get file extension to determine content type
+      const ext = path.extname(resumeLocation).toLowerCase();
+      const contentTypes = {
+        '.pdf': 'application/pdf',
+        '.doc': 'application/msword',
+        '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        '.txt': 'text/plain',
+      };
+      const contentType = contentTypes[ext] || 'application/octet-stream';
+
+      // Get original filename from resumePath (format: timestamp-originalname)
+      const filename = path.basename(resumeLocation);
+      // Extract original filename (remove timestamp prefix)
+      const originalFilename = filename.includes('-') 
+        ? filename.substring(filename.indexOf('-') + 1)
+        : filename;
+
+      // Set headers for file download
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Content-Disposition', `attachment; filename="${originalFilename}"`);
+      res.setHeader('Cache-Control', 'no-cache');
+
+      // Read and send file
+      const fileBuffer = await fs.readFile(resumeLocation);
+      res.send(fileBuffer);
+
+      console.log(`[User] Resume downloaded for user ${user._id}: ${originalFilename}`);
     }
-
-    // Get file extension to determine content type
-    const ext = path.extname(user.resumePath).toLowerCase();
-    const contentTypes = {
-      '.pdf': 'application/pdf',
-      '.doc': 'application/msword',
-      '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      '.txt': 'text/plain',
-    };
-    const contentType = contentTypes[ext] || 'application/octet-stream';
-
-    // Get original filename from resumePath (format: timestamp-originalname)
-    const filename = path.basename(user.resumePath);
-    // Extract original filename (remove timestamp prefix)
-    const originalFilename = filename.includes('-') 
-      ? filename.substring(filename.indexOf('-') + 1)
-      : filename;
-
-    // Set headers for file download
-    res.setHeader('Content-Type', contentType);
-    res.setHeader('Content-Disposition', `attachment; filename="${originalFilename}"`);
-    res.setHeader('Cache-Control', 'no-cache');
-
-    // Read and send file
-    const fileBuffer = await fs.readFile(user.resumePath);
-    res.send(fileBuffer);
-
-    console.log(`[User] Resume downloaded for user ${user._id}: ${originalFilename}`);
   } catch (error) {
     console.error('Error downloading resume:', error);
     res.status(500).json({ error: 'Internal server error', details: error.message });
   }
 });
 
-// GET /api/users/:id - Get user profile
-router.get('/:id', async (req, res) => {
+// GET /api/users/searches - Get all searches (with pagination) - MUST come before /:id route
+router.get('/searches', async (req, res) => {
   try {
-    const user = await User.findById(req.params.id);
-    
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
+    const { limit = 50, page = 1, sortBy = 'createdAt', sortOrder = 'desc' } = req.query;
 
-    res.json(user);
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const sort = {};
+    sort[sortBy] = sortOrder === 'asc' ? 1 : -1;
+
+    const searches = await CandidateSearch.find()
+      .populate('shortlistedUsers', 'name email')
+      .populate('rejectedUsers', 'name email')
+      .sort(sort)
+      .limit(parseInt(limit))
+      .skip(skip)
+      .lean();
+
+    const total = await CandidateSearch.countDocuments();
+
+    res.json({
+      total,
+      page: parseInt(page),
+      limit: parseInt(limit),
+      searches: searches.map(search => ({
+        searchId: search._id,
+        searchText: search.searchText,
+        totalResults: search.totalResults,
+        shortlistedCount: search.shortlistedUsers?.length || 0,
+        rejectedCount: search.rejectedUsers?.length || 0,
+        createdAt: search.createdAt,
+        updatedAt: search.updatedAt,
+      })),
+    });
   } catch (error) {
-    console.error('Error fetching user:', error);
-    res.status(500).json({ error: 'Internal server error', details: error.message });
-  }
-});
-
-// PATCH /api/users/:id - Update user info
-router.patch('/:id', async (req, res) => {
-  try {
-    const { githubUrl, portfolioUrl, compensationExpectation, name, phone, isHired } = req.body;
-
-    const user = await User.findById(req.params.id);
-    
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
-    if (githubUrl !== undefined) user.githubUrl = githubUrl;
-    if (portfolioUrl !== undefined) user.portfolioUrl = portfolioUrl;
-    if (compensationExpectation !== undefined) user.compensationExpectation = compensationExpectation;
-    if (name !== undefined) user.name = name;
-    if (phone !== undefined) user.phone = phone;
-    if (isHired !== undefined) {
-      user.isHired = isHired;
-      if (isHired && !user.hiredAt) {
-        user.hiredAt = new Date();
-      } else if (!isHired) {
-        user.hiredAt = null;
-      }
-    }
-
-    await user.save();
-
-    res.json(user);
-  } catch (error) {
-    console.error('Error updating user:', error);
+    console.error('Error fetching searches:', error);
     res.status(500).json({ error: 'Internal server error', details: error.message });
   }
 });
@@ -619,41 +637,52 @@ router.get('/search/:searchId', async (req, res) => {
   }
 });
 
-// GET /api/users/searches - Get all searches (with pagination)
-router.get('/searches', async (req, res) => {
+// GET /api/users/:id - Get user profile (MUST come after all /search* routes)
+router.get('/:id', async (req, res) => {
   try {
-    const { limit = 50, page = 1, sortBy = 'createdAt', sortOrder = 'desc' } = req.query;
+    const user = await User.findById(req.params.id);
+    
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
 
-    const skip = (parseInt(page) - 1) * parseInt(limit);
-    const sort = {};
-    sort[sortBy] = sortOrder === 'asc' ? 1 : -1;
-
-    const searches = await CandidateSearch.find()
-      .populate('shortlistedUsers', 'name email')
-      .populate('rejectedUsers', 'name email')
-      .sort(sort)
-      .limit(parseInt(limit))
-      .skip(skip)
-      .lean();
-
-    const total = await CandidateSearch.countDocuments();
-
-    res.json({
-      total,
-      page: parseInt(page),
-      limit: parseInt(limit),
-      searches: searches.map(search => ({
-        searchId: search._id,
-        searchText: search.searchText,
-        totalResults: search.totalResults,
-        shortlistedCount: search.shortlistedUsers?.length || 0,
-        rejectedCount: search.rejectedUsers?.length || 0,
-        createdAt: search.createdAt,
-        updatedAt: search.updatedAt,
-      })),
-    });
+    res.json(user);
   } catch (error) {
-    console.error('Error fetching searches:', error);
+    console.error('Error fetching user:', error);
+    res.status(500).json({ error: 'Internal server error', details: error.message });
+  }
+});
+
+// PATCH /api/users/:id - Update user info (MUST come after all /search* routes)
+router.patch('/:id', async (req, res) => {
+  try {
+    const { githubUrl, portfolioUrl, compensationExpectation, name, phone, isHired } = req.body;
+
+    const user = await User.findById(req.params.id);
+    
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (githubUrl !== undefined) user.githubUrl = githubUrl;
+    if (portfolioUrl !== undefined) user.portfolioUrl = portfolioUrl;
+    if (compensationExpectation !== undefined) user.compensationExpectation = compensationExpectation;
+    if (name !== undefined) user.name = name;
+    if (phone !== undefined) user.phone = phone;
+    if (isHired !== undefined) {
+      user.isHired = isHired;
+      if (isHired && !user.hiredAt) {
+        user.hiredAt = new Date();
+      } else if (!isHired) {
+        user.hiredAt = null;
+      }
+    }
+
+    await user.save();
+
+    res.json(user);
+  } catch (error) {
+    console.error('Error updating user:', error);
     res.status(500).json({ error: 'Internal server error', details: error.message });
   }
 });

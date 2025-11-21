@@ -188,141 +188,57 @@ router.post('/:jobId', upload.single('resume'), async (req, res) => {
       return res.status(404).json({ error: 'Job not found' });
     }
 
-    // Save resume file
-    const resumePath = await saveUploadedFile(req.file);
-    const resumeText = await readFileAsText(resumePath);
-
-    // Log extracted resume text for debugging
-    if (resumeText) {
-      console.log(`[Application] Extracted ${resumeText.length} characters from resume`);
-      console.log(`[Application] Resume text preview (first 500 chars): ${resumeText.substring(0, 500)}...`);
-    } else {
-      console.warn('[Application] Warning: No text extracted from resume file');
-    }
-
-    // Quick parse resume to extract contact info (for immediate user creation)
-    // This is a lightweight parse just for contact info, full parse happens async
-    let quickParsedData = null;
-    try {
-      const quickParseResponse = await callLLM('RESUME_PARSER', { resumeText });
-      const quickParsed = parseJsonSafely(quickParseResponse);
-      if (quickParsed.ok) {
-        quickParsedData = quickParsed.json;
-        console.log('[Application] Quick resume parse completed for contact info extraction');
-      }
-    } catch (error) {
-      console.warn('[Application] Quick resume parse failed, will use provided info:', error.message);
-      // Continue with provided info if parse fails
-    }
-
-    // Extract contact info from resume if available
-    let extractedName = applicant_name;
-    let extractedEmail = applicant_email;
-    let extractedPhone = applicant_phone;
-    let extractedLinkedIn = linkedinUrl;
-    let extractedGithub = githubUrl;
-    let extractedPortfolio = portfolioUrl;
-
-    if (quickParsedData) {
-      // Extract name
-      if (quickParsedData.name && (!extractedName || extractedName === 'Unknown')) {
-        extractedName = quickParsedData.name.trim();
-        console.log(`[Application] Extracted name from resume: ${extractedName}`);
-      }
-      
-      // Extract contact info
-      if (quickParsedData.contact) {
-        if (quickParsedData.contact.email && !extractedEmail) {
-          extractedEmail = quickParsedData.contact.email.trim().toLowerCase();
-          console.log(`[Application] Extracted email from resume: ${extractedEmail}`);
-        }
-        if (quickParsedData.contact.phone && !extractedPhone) {
-          extractedPhone = quickParsedData.contact.phone.trim();
-          console.log(`[Application] Extracted phone from resume: ${extractedPhone}`);
-        }
-        if (quickParsedData.contact.linkedin && !extractedLinkedIn) {
-          extractedLinkedIn = quickParsedData.contact.linkedin.trim();
-          console.log(`[Application] Extracted LinkedIn URL from resume: ${extractedLinkedIn}`);
-        }
-        if (quickParsedData.contact.github && !extractedGithub) {
-          extractedGithub = quickParsedData.contact.github.trim();
-          console.log(`[Application] Extracted GitHub URL from resume: ${extractedGithub}`);
-        }
-        if (quickParsedData.contact.portfolio && !extractedPortfolio) {
-          extractedPortfolio = quickParsedData.contact.portfolio.trim();
-          console.log(`[Application] Extracted portfolio URL from resume: ${extractedPortfolio}`);
-        }
-      }
-    }
-
-    // Use extracted email if available, otherwise use provided email
-    const finalEmail = extractedEmail || applicant_email;
-    if (!finalEmail) {
-      return res.status(400).json({ error: 'Email is required. Please provide applicant_email or ensure resume contains email address.' });
-    }
-
-    // Find or create user (minimal processing for immediate response)
-    let user = await User.findOne({ email: finalEmail.toLowerCase() });
+    // Save resume file to S3 (or local storage) - minimal sync operation
+    const resumePathOrUrl = await saveUploadedFile(req.file);
     
-    // Update user with basic info immediately (prefer extracted data if available)
+    // Determine if it's an S3 URL or local path
+    const isS3Url = resumePathOrUrl && resumePathOrUrl.startsWith('https://') && resumePathOrUrl.includes('.s3.');
+
+    // Use provided email (extraction from resume will happen async)
+    if (!applicant_email) {
+      return res.status(400).json({ error: 'applicant_email is required' });
+    }
+    const finalEmail = applicant_email.toLowerCase();
+
+    // Find or create user with minimal info (only what's provided in request)
+    let user = await User.findOne({ email: finalEmail });
+    
     if (!user) {
       user = new User({
-        email: finalEmail.toLowerCase(),
-        name: extractedName || applicant_name || 'Unknown',
-        phone: extractedPhone || applicant_phone,
-        resumePath,
-        resumeText,
-        githubUrl: extractedGithub || githubUrl,
-        portfolioUrl: extractedPortfolio || portfolioUrl,
-        linkedinUrl: extractedLinkedIn || linkedinUrl,
-        compensationExpectation,
+        email: finalEmail,
+        name: applicant_name || 'Unknown',
+        phone: applicant_phone || null,
+        resumePath: resumePathOrUrl, // Keep for backward compatibility
+        resumeS3Url: isS3Url ? resumePathOrUrl : null, // Store S3 URL if it's from S3
+        githubUrl: githubUrl || null,
+        portfolioUrl: portfolioUrl || null,
+        linkedinUrl: linkedinUrl || null,
+        compensationExpectation: compensationExpectation || null,
       });
     } else {
-      // Update user info (prefer extracted data if available and current value is missing)
-      if (resumePath) user.resumePath = resumePath;
-      if (resumeText) user.resumeText = resumeText;
-      
-      // Update name if extracted and current is generic/missing
-      if (extractedName && (!user.name || user.name === 'Unknown' || user.name.trim() === '')) {
-        user.name = extractedName;
-      } else if (applicant_name && applicant_name !== 'Unknown') {
+      // Update user with provided info (only if not already set)
+      if (resumePathOrUrl) {
+        user.resumePath = resumePathOrUrl;
+        user.resumeS3Url = isS3Url ? resumePathOrUrl : null;
+      }
+      if (applicant_name && applicant_name !== 'Unknown' && (!user.name || user.name === 'Unknown')) {
         user.name = applicant_name;
       }
-      
-      // Update phone if extracted and current is missing
-      if (extractedPhone && (!user.phone || user.phone.trim() === '')) {
-        user.phone = extractedPhone;
-      } else if (applicant_phone) {
+      if (applicant_phone && !user.phone) {
         user.phone = applicant_phone;
       }
-      
-      // Update email only if extracted email matches (for validation)
-      if (extractedEmail && extractedEmail === user.email.toLowerCase()) {
-        // Email matches, no update needed
-      } else if (applicant_email) {
-        // Keep existing email to maintain user identity
-      }
-      
-      // Update URLs if extracted and current is missing
-      if (extractedLinkedIn && (!user.linkedinUrl || user.linkedinUrl.trim() === '')) {
-        user.linkedinUrl = extractedLinkedIn;
-      } else if (linkedinUrl) {
-        user.linkedinUrl = linkedinUrl;
-      }
-      
-      if (extractedGithub && (!user.githubUrl || user.githubUrl.trim() === '')) {
-        user.githubUrl = extractedGithub;
-      } else if (githubUrl) {
+      if (githubUrl && !user.githubUrl) {
         user.githubUrl = githubUrl;
       }
-      
-      if (extractedPortfolio && (!user.portfolioUrl || user.portfolioUrl.trim() === '')) {
-        user.portfolioUrl = extractedPortfolio;
-      } else if (portfolioUrl) {
+      if (portfolioUrl && !user.portfolioUrl) {
         user.portfolioUrl = portfolioUrl;
       }
-      
-      if (compensationExpectation) user.compensationExpectation = compensationExpectation;
+      if (linkedinUrl && !user.linkedinUrl) {
+        user.linkedinUrl = linkedinUrl;
+      }
+      if (compensationExpectation && !user.compensationExpectation) {
+        user.compensationExpectation = compensationExpectation;
+      }
     }
     await user.save();
 
@@ -336,8 +252,8 @@ router.post('/:jobId', upload.single('resume'), async (req, res) => {
     const application = new Application({
       jobId: job._id,
       userId: user._id,
-      resumePath,
-      resumeText,
+      resumePath: resumePathOrUrl, // Can be S3 URL or local path
+      resumeText: '', // Will be populated async
       consent_given: false,
       level1_approved: false,
       matchId: existingMatch?._id || null,
@@ -358,7 +274,7 @@ router.post('/:jobId', upload.single('resume'), async (req, res) => {
       await existingMatch.save();
     }
 
-    // Return immediate success response
+    // Return immediate success response (before any LLM processing)
     res.status(201).json({
       message: 'Application submitted successfully',
       applicationId: application._id,
@@ -368,8 +284,8 @@ router.post('/:jobId', upload.single('resume'), async (req, res) => {
       },
     });
 
-    // Process all scoring asynchronously (don't await - fire and forget)
-    processApplicationScoring(application._id, job, user, resumeText, githubUrl, portfolioUrl, linkedinUrl).catch(error => {
+    // Process ALL LLM operations asynchronously (don't await - fire and forget)
+    processApplicationScoring(application._id, job._id, user._id, resumePathOrUrl, githubUrl, portfolioUrl, linkedinUrl).catch(error => {
       console.error(`[Application] Error processing scoring for application ${application._id}:`, error);
     });
   } catch (error) {
@@ -382,9 +298,36 @@ router.post('/:jobId', upload.single('resume'), async (req, res) => {
  * Async function to process application scoring (resume, GitHub/Portfolio, compensation)
  * This runs in the background after the application is created
  */
-async function processApplicationScoring(applicationId, job, user, resumeText, githubUrl, portfolioUrl, linkedinUrl) {
+async function processApplicationScoring(applicationId, jobId, userId, resumePathOrUrl, githubUrl, portfolioUrl, linkedinUrl) {
   try {
     console.log(`[Application] Starting async scoring for application ${applicationId}`);
+    
+    // Fetch job, user, and application from database
+    const job = await Job.findById(jobId);
+    const user = await User.findById(userId);
+    const application = await Application.findById(applicationId);
+    
+    if (!job || !user || !application) {
+      throw new Error('Job, user, or application not found');
+    }
+    
+    // Extract resume text (this is now async)
+    const resumeText = await readFileAsText(resumePathOrUrl);
+    
+    // Log extracted resume text for debugging
+    if (resumeText) {
+      console.log(`[Application] Extracted ${resumeText.length} characters from resume`);
+      console.log(`[Application] Resume text preview (first 500 chars): ${resumeText.substring(0, 500)}...`);
+    } else {
+      console.warn('[Application] Warning: No text extracted from resume file');
+    }
+    
+    // Update application and user with resume text
+    application.resumeText = resumeText;
+    await application.save();
+    
+    user.resumeText = resumeText;
+    await user.save();
     
     // Parallel execution: Run all resume-related LLM calls and GitHub data fetch simultaneously
     const resumeProcessingPromises = [];
@@ -652,8 +595,7 @@ async function processApplicationScoring(applicationId, job, user, resumeText, g
     };
     const unifiedScore = calculateUnifiedScore(scores);
 
-    // Update application with all scoring data
-    const application = await Application.findById(applicationId);
+    // Update application with all scoring data (application was already fetched at the start)
     if (application) {
       application.scores = scores;
       application.unifiedScore = unifiedScore;
@@ -919,6 +861,75 @@ router.post('/:id/schedule-call', async (req, res) => {
     }
     await application.save();
 
+    // Send email notification about the phone interview (async - don't wait)
+    if (user.email) {
+      (async () => {
+        try {
+          // Generate email content using LLM
+          const emailLLMResponse = await callLLM('PHONE_INTERVIEW_EMAIL', {
+            candidateName: user.name,
+            role: job.role,
+            company: job.company_name,
+            phoneNumber: phoneNumber,
+            scheduledStartTime: start_time,
+            questions: questions,
+          });
+
+          const emailParsed = parseJsonSafely(emailLLMResponse);
+          
+          if (emailParsed.ok) {
+            const emailData = emailParsed.json;
+            
+            // Send email
+            const emailResult = await sendEmail({
+              to: user.email,
+              subject: emailData.subject || `Phone Interview Invitation - ${job.role} at ${job.company_name}`,
+              html: emailData.html_snippet || emailData.plain_text,
+              text: emailData.plain_text || emailData.html_snippet?.replace(/<[^>]*>/g, ''),
+            });
+
+            if (emailResult.ok) {
+              console.log(`[Application] Phone interview email sent to ${user.email} for application ${application._id}`);
+            } else {
+              console.error(`[Application] Failed to send phone interview email:`, emailResult.error);
+            }
+          } else {
+            console.error('[Application] Failed to parse phone interview email response:', emailParsed.error);
+            // Fallback: Send a simple email if LLM fails
+            const fallbackSubject = start_time 
+              ? `Phone Interview Scheduled - ${job.role} at ${job.company_name}`
+              : `Phone Interview Invitation - ${job.role} at ${job.company_name}`;
+            
+            const fallbackHtml = `
+              <h2>Hello ${user.name},</h2>
+              <p>Congratulations! You have been shortlisted for the <strong>${job.role}</strong> position at ${job.company_name || 'Paytm'}.</p>
+              <p>We would like to invite you for an AI-based phone interview.</p>
+              ${start_time ? `<p><strong>Scheduled Time:</strong> ${start_time}</p>` : '<p>You will receive a call shortly at: <strong>' + phoneNumber + '</strong></p>'}
+              <p><strong>What to expect:</strong></p>
+              <ul>
+                <li>An AI interviewer named "Neo" will call you</li>
+                <li>The interview will take approximately 5-10 minutes</li>
+                <li>You'll be asked technical and behavioral questions</li>
+                <li>Please answer naturally and be patient if there are brief pauses</li>
+              </ul>
+              <p>We look forward to speaking with you!</p>
+              <p>Best regards,<br>${job.company_name || 'Paytm'} HR Team</p>
+            `;
+            
+            await sendEmail({
+              to: user.email,
+              subject: fallbackSubject,
+              html: fallbackHtml,
+              text: fallbackHtml.replace(/<[^>]*>/g, ''),
+            });
+          }
+        } catch (error) {
+          console.error(`[Application] Error sending phone interview email:`, error);
+          // Don't fail the request if email fails
+        }
+      })();
+    }
+
     res.json({
       message: start_time ? 'Phone interview call scheduled' : 'Phone interview call initiated',
       callId: callResult.callId,
@@ -926,6 +937,7 @@ router.post('/:id/schedule-call', async (req, res) => {
       phoneNumber: phoneNumber,
       applicationId: application._id,
       startTime: start_time || null,
+      emailSent: user.email ? true : false,
       checkStatusUrl: `/api/applications/${application._id}/phone-call-status`,
     });
   } catch (error) {
@@ -1366,9 +1378,12 @@ async function processSingleResumeValidation(batchId, job, file, index) {
       await batchValidation.save();
     }
 
-    // Save resume file
-    const resumePath = await saveUploadedFile(file);
-    const resumeText = await readFileAsText(resumePath);
+    // Save resume file to S3 (or local storage)
+    const resumePathOrUrl = await saveUploadedFile(file);
+    const resumeText = await readFileAsText(resumePathOrUrl);
+    
+    // Determine if it's an S3 URL or local path
+    const isS3Url = resumePathOrUrl && resumePathOrUrl.startsWith('https://') && resumePathOrUrl.includes('.s3.');
 
     if (!resumeText || resumeText.trim().length === 0) {
       throw new Error('No text extracted from resume file');
@@ -1431,7 +1446,8 @@ async function processSingleResumeValidation(batchId, job, file, index) {
         email: extractedEmail.toLowerCase(),
         name: extractedName,
         phone: extractedPhone,
-        resumePath,
+        resumePath: resumePathOrUrl, // Keep for backward compatibility
+        resumeS3Url: isS3Url ? resumePathOrUrl : null, // Store S3 URL if it's from S3
         resumeText,
         tags: resumeTags,
         parsedResume: parsedResumeData,
@@ -1446,7 +1462,8 @@ async function processSingleResumeValidation(batchId, job, file, index) {
         lastJobSwitchDate: parsedResumeData?.lastJobSwitchDate || null,
       });
     } else {
-      user.resumePath = resumePath;
+      user.resumePath = resumePathOrUrl; // Keep for backward compatibility
+      user.resumeS3Url = isS3Url ? resumePathOrUrl : null; // Store S3 URL if it's from S3
       user.resumeText = resumeText;
       if (resumeTags.length > 0) user.tags = resumeTags;
       
@@ -1499,7 +1516,7 @@ async function processSingleResumeValidation(batchId, job, file, index) {
     const application = new Application({
       jobId: job._id,
       userId: user._id,
-      resumePath,
+      resumePath: resumePathOrUrl, // Can be S3 URL or local path
       resumeText,
       scores,
       unifiedScore,

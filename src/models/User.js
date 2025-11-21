@@ -18,7 +18,10 @@ const userSchema = new mongoose.Schema({
     trim: true,
   },
   resumePath: {
-    type: String,
+    type: String, // Can be S3 URL or local path (for backward compatibility)
+  },
+  resumeS3Url: {
+    type: String, // S3 URL for the resume
   },
   resumeText: {
     type: String,

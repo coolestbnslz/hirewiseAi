@@ -517,6 +517,67 @@ Return ONLY valid JSON, no additional text.`;
 }
 
 /**
+ * Build prompt for generating phone interview email
+ */
+function buildPhoneInterviewEmailPrompt(payload) {
+  const {
+    candidateName,
+    role,
+    company,
+    phoneNumber,
+    scheduledStartTime,
+    questions,
+  } = payload;
+
+  const isScheduled = !!scheduledStartTime;
+  const timeInfo = isScheduled 
+    ? `The interview is scheduled for: ${scheduledStartTime}`
+    : 'You will receive a call shortly at the phone number we have on file.';
+
+  const questionsPreview = questions && questions.length > 0
+    ? `\n\nTopics that may be covered:\n${questions.slice(0, 3).map((q, i) => `${i + 1}. ${q.text}`).join('\n')}`
+    : '';
+
+  return `Generate a professional, warm email inviting a candidate to an AI-based phone interview for Paytm (Indian fintech company).
+
+IMPORTANT CONTEXT:
+- Company: Paytm (leading Indian fintech company, based in Noida)
+- Use Indian English conventions and cultural context
+- Be warm, professional, and reassuring about the AI-based interview
+- Explain what to expect from the AI interviewer
+- Use a friendly, approachable tone
+
+Candidate: ${candidateName}
+Role: ${role}
+Company: ${company || 'Paytm'}
+Phone Number: ${phoneNumber}
+${isScheduled ? `Scheduled Time: ${scheduledStartTime}` : 'Call Type: Immediate/Shortly'}
+
+Email should include:
+1. Greeting and congratulations on being shortlisted
+2. Explanation that this is an AI-based phone interview (reassure them it's normal)
+3. ${isScheduled ? 'Scheduled time and timezone' : 'Information that they will receive a call shortly'}
+4. What to expect: The AI interviewer (Neo) will ask technical and behavioral questions
+5. Duration: Approximately 5-10 minutes
+6. Instructions: Answer naturally, be patient if there are pauses, speak clearly
+7. Phone number confirmation: ${phoneNumber}
+8. What happens next: They'll be contacted after the interview
+9. Contact information if they have questions
+${questionsPreview}
+
+Tone: Professional, warm, reassuring, and clear. Make them feel comfortable about the AI interview process.
+
+Return a JSON object:
+{
+  "subject": "Email subject line (professional and clear)",
+  "html_snippet": "Full HTML email body with proper formatting",
+  "plain_text": "Plain text version of the email"
+}
+
+Return ONLY valid JSON, no additional text.`;
+}
+
+/**
  * Build prompt for generating LinkedIn summary
  */
 function buildLinkedInSummaryPrompt(payload) {
@@ -1204,6 +1265,11 @@ export async function callLLM(promptName, payload) {
 
     case 'EMAIL_GENERATOR':
       prompt = buildEmailGeneratorPrompt(payload);
+      temperature = 0.8; // More creative for personalized emails
+      break;
+
+    case 'PHONE_INTERVIEW_EMAIL':
+      prompt = buildPhoneInterviewEmailPrompt(payload);
       temperature = 0.8; // More creative for personalized emails
       break;
 

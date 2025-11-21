@@ -10,7 +10,8 @@ A complete Node.js + Express backend for HR job posting with JD enhancement and 
 - **Unified Scoring**: Weighted scoring system combining multiple evaluation criteria
 - **User Management**: Store candidate information, resumes, and tags for future job matching
 - **Hired Status Tracking**: Mark candidates as hired to exclude them from future matches
-- **Automated Screening**: Auto-create video screenings based on score thresholds
+- **Automated Screening**: Auto-create video/phone screenings based on score thresholds
+- **Phone Interviews**: AI-powered phone interviews via Bland AI (technical and behavioral questions)
 - **Video Processing**: STT transcription and video scoring
 - **Email Automation**: Auto-send video invites when applications are approved
 
@@ -69,6 +70,18 @@ SMTP_FROM_NAME=HireWise Team
 
 # GitHub API Configuration (optional but recommended)
 GITHUB_TOKEN=your_github_personal_access_token
+
+# AWS S3 Configuration (for resume storage)
+AWS_S3_BUCKET_NAME=your-s3-bucket-name
+AWS_S3_REGION=us-west-2  # Optional: S3 bucket region (defaults to AWS_REGION if not set)
+AWS_ACCESS_KEY_ID=your_aws_access_key_id
+AWS_SECRET_ACCESS_KEY=your_aws_secret_access_key
+# Note: If S3 is not configured, resumes will be stored locally in tmp_uploads directory
+# Note: AWS_S3_REGION can be different from AWS_REGION (used for Bedrock)
+
+# Bland AI Configuration (for phone interviews)
+BLAND_API_KEY=your_bland_ai_api_key
+WEBHOOK_BASE_URL=https://yourdomain.com  # Base URL for webhooks (optional)
 ```
 
 **Configuration Notes:**
@@ -91,8 +104,17 @@ GITHUB_TOKEN=your_github_personal_access_token
    - Set `GITHUB_TOKEN` in your `.env` file
    - Without a token, GitHub API requests are rate-limited to 60 requests/hour
    - With a token, you get 5,000 requests/hour
+5. **AWS S3 (Optional but Recommended for Production)**:
+   - Create an S3 bucket in your AWS account
+   - Create an IAM user with S3 read/write permissions for the bucket
+   - Generate Access Key ID and Secret Access Key for the IAM user
+   - Set `AWS_S3_BUCKET_NAME`, `AWS_ACCESS_KEY_ID`, and `AWS_SECRET_ACCESS_KEY` in your `.env` file
+   - **Important**: If your S3 bucket is in a different region than your Bedrock service, set `AWS_S3_REGION` (e.g., `AWS_S3_REGION=us-west-2`)
+   - If `AWS_S3_REGION` is not set, it will default to `AWS_REGION` (used for Bedrock)
+   - If S3 is not configured, resumes will be stored locally in `tmp_uploads` directory
+   - **Note**: For public access to resumes, you may need to configure bucket policies or use signed URLs
 
-4. Start MongoDB (if running locally):
+5. Start MongoDB (if running locally):
 ```bash
 # macOS with Homebrew
 brew services start mongodb-community
@@ -217,11 +239,15 @@ curl -X POST http://localhost:3000/api/applications/<applicationId>/consent
 
 ### 8. Approve Application Level 1 (POST /api/applications/:id/approve-level1)
 
-Approve the application. If auto-invite is enabled and score meets threshold, an email will be automatically sent.
+Approve the application. If auto-invite is enabled and score meets threshold:
+- A phone interview call will be automatically initiated via Bland AI (if candidate has phone number)
+- An email will be automatically sent (if configured)
 
 ```bash
 curl -X POST http://localhost:3000/api/applications/<applicationId>/approve-level1
 ```
+
+Response includes `phoneCallInitiated` and `emailSent` flags.
 
 ### 9. Get Screening Questions (GET /api/screenings/:id/questions)
 
@@ -269,6 +295,44 @@ Transcribe video and score it using the questions that were set at upload time.
 ```bash
 curl -X POST http://localhost:3000/api/screenings/<screeningId>/process
 ```
+
+### 11a. Initiate Phone Interview (POST /api/screenings/:id/initiate-phone-call)
+
+Manually initiate a phone interview call via Bland AI. The call will ask only technical and behavioral questions (no notice period, compensation, etc.).
+
+```bash
+curl -X POST http://localhost:3000/api/screenings/<screeningId>/initiate-phone-call
+```
+
+**Note:** This endpoint is automatically called when HR approves a candidate (if auto-invite is enabled), but can also be called manually.
+
+### 11b. Get Phone Call Status (GET /api/screenings/:id/phone-call-status)
+
+Get the current status of a phone interview call, including transcript, summary, and analysis.
+
+```bash
+curl http://localhost:3000/api/screenings/<screeningId>/phone-call-status
+```
+
+Response includes:
+- `phoneInterview.status`: Current call status (initiated, ringing, in_progress, completed, failed, no_answer)
+- `phoneInterview.recordingUrl`: URL to call recording (if available)
+- `phoneInterview.transcript`: Full call transcript
+- `phoneInterview.summary`: AI-generated summary of the call
+- `phoneInterview.analysis`: Structured analysis with technical skills, behavioral traits, communication quality, overall fit, strengths, and concerns
+
+### 11c. Get Call Recording (GET /api/screenings/:id/recording)
+
+Get the call recording URL. This endpoint fetches the recording URL from Bland AI if not already stored.
+
+```bash
+curl http://localhost:3000/api/screenings/<screeningId>/recording
+```
+
+Response includes:
+- `recordingUrl`: Direct URL to the call recording (available when call is completed)
+- `status`: Current call status
+- `message`: Status message if recording is not yet available
 
 ### 12. Get User (GET /api/users/:id)
 

@@ -107,9 +107,12 @@ export async function verifyEmailConnection() {
  * @param {string} options.html - HTML email body
  * @param {string} options.text - Plain text email body
  * @param {string} options.from - Optional sender email (defaults to SMTP_FROM_EMAIL)
+ * @param {string|string[]} options.cc - Optional CC recipients
+ * @param {string|string[]} options.bcc - Optional BCC recipients
+ * @param {string} options.replyTo - Optional reply-to address
  * @returns {Promise<{ok: boolean, id?: string, error?: string}>}
  */
-export async function sendEmail({ to, subject, html, text, from }) {
+export async function sendEmail({ to, subject, html, text, from, cc, bcc, replyTo }) {
   console.log(`[EMAIL] Sending email to ${to}`);
   console.log(`[EMAIL] Subject: ${subject}`);
 
@@ -135,13 +138,20 @@ export async function sendEmail({ to, subject, html, text, from }) {
   const fromAddress = FROM_NAME ? `${FROM_NAME} <${fromEmail}>` : fromEmail;
 
   try {
-    const info = await transporter.sendMail({
+    const mailOptions = {
       from: fromAddress,
       to,
       subject,
       text: text || html?.replace(/<[^>]*>/g, ''), // Strip HTML if no text provided
       html: html || text, // Use text as HTML if no HTML provided
-    });
+    };
+
+    // Add optional fields if provided
+    if (cc) mailOptions.cc = cc;
+    if (bcc) mailOptions.bcc = bcc;
+    if (replyTo) mailOptions.replyTo = replyTo;
+
+    const info = await transporter.sendMail(mailOptions);
 
     console.log(`[EMAIL] Email sent successfully. Message ID: ${info.messageId}`);
     
