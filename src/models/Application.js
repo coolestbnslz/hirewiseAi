@@ -59,10 +59,6 @@ const applicationSchema = new mongoose.Schema({
     type: String,
     enum: ['yes', 'maybe', 'no'],
   },
-  consent_given: {
-    type: Boolean,
-    default: false,
-  },
   level1_approved: {
     type: Boolean,
     default: false,

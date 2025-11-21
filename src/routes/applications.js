@@ -118,7 +118,6 @@ router.get('/job/:jobId', async (req, res) => {
         compensationAnalysis: app.scores?.compensationAnalysis || null,
       },
       status: {
-        consentGiven: app.consent_given,
         level1Approved: app.level1_approved,
         rejected: app.rejected || false,
         rejectedAt: app.rejectedAt || null,
@@ -256,7 +255,6 @@ router.post('/:jobId', upload.single('resume'), async (req, res) => {
       userId: user._id,
       resumePath: resumePathOrUrl, // Can be S3 URL or local path
       resumeText: '', // Will be populated async
-      consent_given: false,
       level1_approved: false,
       matchId: existingMatch?._id || null,
       // Scores will be updated asynchronously
@@ -640,7 +638,6 @@ router.post('/:id/consent', async (req, res) => {
       return res.status(404).json({ error: 'Application not found' });
     }
 
-    application.consent_given = true;
     await application.save();
 
     res.json({ message: 'Consent recorded', application });
@@ -659,9 +656,6 @@ router.post('/:id/approve-level1', async (req, res) => {
       return res.status(404).json({ error: 'Application not found' });
     }
 
-    if (!application.consent_given) {
-      return res.status(400).json({ error: 'Consent not given. Cannot approve without consent.' });
-    }
 
     application.level1_approved = true;
     // If rejected, unset rejection (can't be both approved and rejected)
