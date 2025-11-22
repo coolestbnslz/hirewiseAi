@@ -93,14 +93,50 @@ export async function makeBlandAICall({ phoneNumber, candidateName, job, applica
 
     // Add start_time if provided (for scheduled calls)
     // Format: "YYYY-MM-DD HH:MM:SS -HH:MM" (e.g., "2021-01-01 12:00:00 -05:00")
+    // If start_time is less than 5 minutes from now, don't schedule it (make it immediate)
     if (startTime) {
       // Validate start_time format
       const startTimeRegex = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [-\+]\d{2}:\d{2}$/;
       if (!startTimeRegex.test(startTime)) {
         throw new Error(`Invalid start_time format. Expected "YYYY-MM-DD HH:MM:SS -HH:MM" (e.g., "2021-01-01 12:00:00 -05:00"). Received: ${startTime}`);
       }
-      payload.start_time = startTime;
-      console.log(`[BlandAI] Scheduling call for: ${startTime}`);
+      
+      // Parse the start_time string to a Date object
+      // Format: "YYYY-MM-DD HH:MM:SS -HH:MM" -> "YYYY-MM-DDTHH:MM:SS-HH:MM"
+      // Replace first space with 'T' and remove the space before timezone offset
+      const parts = startTime.split(' ');
+      if (parts.length !== 3) {
+        throw new Error(`Invalid start_time format. Expected "YYYY-MM-DD HH:MM:SS -HH:MM". Received: ${startTime}`);
+      }
+      
+      // Construct ISO string: "YYYY-MM-DDTHH:MM:SS-HH:MM"
+      const isoString = `${parts[0]}T${parts[1]}${parts[2]}`;
+      const scheduledDate = new Date(isoString);
+      const now = new Date();
+      
+      // Check if date parsing was successful
+      if (isNaN(scheduledDate.getTime())) {
+        throw new Error(`Invalid start_time date. Could not parse: ${startTime}`);
+      }
+      
+      // Calculate difference in milliseconds
+      const timeDifference = scheduledDate.getTime() - now.getTime();
+      const fiveMinutesInMs = 5 * 60 * 1000; // 5 minutes = 300,000 milliseconds
+      
+      // Only schedule if it's at least 5 minutes from now
+      if (timeDifference >= fiveMinutesInMs) {
+        payload.start_time = startTime;
+        console.log(`[BlandAI] Scheduling call for: ${startTime}`);
+      } else {
+        // Less than 5 minutes or in the past, make it an immediate call
+        const minutesAway = Math.round(timeDifference / 1000 / 60);
+        if (timeDifference < 0) {
+          console.log(`[BlandAI] Start time ${startTime} is in the past. Converting to immediate call.`);
+        } else {
+          console.log(`[BlandAI] Start time ${startTime} is ${minutesAway} minutes from now (less than 5 minutes). Converting to immediate call.`);
+        }
+        // Don't add start_time to payload, it will be an immediate call
+      }
     }
 
     const callContext = applicationId ? `application ${applicationId}` : `user ${userId}`;
