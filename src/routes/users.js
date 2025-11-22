@@ -589,60 +589,108 @@ router.post('/search', async (req, res) => {
 
     console.log('[CandidateSearch] Extracted criteria:', JSON.stringify(searchCriteria, null, 2));
 
-    // Build MongoDB query based on extracted criteria
-    const finalQuery = {};
-    const skillOrConditions = []; // For tags and resume keywords (OR logic)
-
-    // Tags search (skills/technologies) - using exact case-insensitive matching
-    // Use $expr with $regexMatch to avoid partial matches (e.g., "java" matching "javascript")
+    // Build MongoDB query based on extracted criteria using hybrid AND/OR logic
+    // Structure: Different criteria types are ANDed together
+    // Within each type, conditions are ORed (e.g., match ANY skill)
+    
+    const andConditions = [];
+    
+    // 1. Skills/Role Criteria (OR within this group - must match at least ONE skill/role)
+    const skillOrConditions = [];
+    
+    // Tags search (skills/technologies/roles) - using exact case-insensitive matching
     if (searchCriteria.tags && Array.isArray(searchCriteria.tags) && searchCriteria.tags.length > 0) {
-      // For each tag, create an exact match condition
-      const tagConditions = searchCriteria.tags.map(tag => {
+      searchCriteria.tags.forEach(tag => {
         // Escape special regex characters
         const escapedTag = tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        // Use $expr with $regexMatch for exact case-insensitive matching in array
-        // This ensures "java" matches "Java" but NOT "JavaScript"
-        return {
-          $expr: {
-            $anyElementTrue: {
-              $map: {
-                input: '$tags',
-                as: 'tag',
-                in: {
-                  $regexMatch: {
-                    input: '$$tag',
-                    regex: new RegExp(`^${escapedTag}$`, 'i'),
+        
+        // Add exact tag match OR resume text match for this skill/role
+        // This allows finding candidates who have the skill in tags OR mentioned in resume
+        skillOrConditions.push({
+          $or: [
+            // Exact match in tags array - use string pattern, not RegExp object
+            {
+              $expr: {
+                $anyElementTrue: {
+                  $map: {
+                    input: '$tags',
+                    as: 'tag',
+                    in: {
+                      $regexMatch: {
+                        input: '$$tag',
+                        regex: `^${escapedTag}$`,  // Use string pattern
+                        options: 'i',
+                      },
+                    },
                   },
                 },
               },
             },
-          },
-        };
+            // Word boundary match in resume text
+            { resumeText: { $regex: `\\b${escapedTag}\\b`, $options: 'i' } }
+          ]
+        });
       });
-      skillOrConditions.push(...tagConditions);
-      console.log('[CandidateSearch] Adding tags filter (exact match):', searchCriteria.tags);
+      console.log('[CandidateSearch] Adding tags filter (exact match in tags OR resume):', searchCriteria.tags);
     }
-
-    // Resume text search (keywords, experience, location)
-    // Add word boundaries to avoid partial matches (e.g., "java" matching "javascript")
-    if (searchCriteria.resumeKeywords && Array.isArray(searchCriteria.resumeKeywords) && searchCriteria.resumeKeywords.length > 0) {
-      searchCriteria.resumeKeywords.forEach(keyword => {
-        // Escape special regex characters
-        const escapedKeyword = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        // Use word boundaries for exact word matching (case-insensitive)
-        // For phrases like "senior software engineer", match the whole phrase
-        const isPhrase = keyword.trim().split(/\s+/).length > 1;
-        const regexPattern = isPhrase 
-          ? `\\b${escapedKeyword}\\b`  // Word boundaries for phrases
-          : `\\b${escapedKeyword}\\b`;  // Word boundaries for single words
-        skillOrConditions.push({ resumeText: { $regex: regexPattern, $options: 'i' } });
-      });
-      console.log('[CandidateSearch] Adding resume keywords filter (with word boundaries):', searchCriteria.resumeKeywords);
-    }
-
-    // If we have skill-based OR conditions (tags or resume keywords), add them
+    
+    // If we have skill/role requirements, at least ONE must match
     if (skillOrConditions.length > 0) {
-      finalQuery.$or = skillOrConditions;
+      andConditions.push({ $or: skillOrConditions });
+    }
+    
+    // 2. Resume Keywords (location, experience, etc.)
+    // Strategy: Separate locations from experience/other keywords
+    const locationKeywords = [];
+    const experienceKeywords = [];
+    
+    if (searchCriteria.resumeKeywords && Array.isArray(searchCriteria.resumeKeywords) && searchCriteria.resumeKeywords.length > 0) {
+      // Common location patterns
+      const locationPatterns = /bangalore|mumbai|delhi|hyderabad|pune|chennai|kolkata|ncr|gurugram|gurgaon|noida|remote/i;
+      // Experience patterns (numbers followed by years, or seniority levels)
+      const experiencePatterns = /\d+\s*(years?|yrs?)|senior|junior|mid-level|lead/i;
+      
+      searchCriteria.resumeKeywords.forEach(keyword => {
+        if (locationPatterns.test(keyword)) {
+          locationKeywords.push(keyword);
+        } else if (experiencePatterns.test(keyword)) {
+          experienceKeywords.push(keyword);
+        }
+      });
+      
+      // Location: OR logic (match any location mentioned)
+      if (locationKeywords.length > 0) {
+        const locationConditions = locationKeywords.map(keyword => {
+          const escapedKeyword = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          return { resumeText: { $regex: `\\b${escapedKeyword}\\b`, $options: 'i' } };
+        });
+        
+        if (locationConditions.length === 1) {
+          andConditions.push(locationConditions[0]);
+        } else {
+          andConditions.push({ $or: locationConditions });
+        }
+        console.log('[CandidateSearch] Adding location filter (OR):', locationKeywords);
+      }
+      
+      // Experience: AND logic (all must match if specified)
+      if (experienceKeywords.length > 0) {
+        experienceKeywords.forEach(keyword => {
+          const escapedKeyword = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          andConditions.push({ resumeText: { $regex: `\\b${escapedKeyword}\\b`, $options: 'i' } });
+        });
+        console.log('[CandidateSearch] Adding experience filter (AND):', experienceKeywords);
+      }
+    }
+    
+    // Build final query
+    const finalQuery = {};
+    if (andConditions.length === 1) {
+      // Only one condition, no need for $and wrapper
+      Object.assign(finalQuery, andConditions[0]);
+    } else if (andConditions.length > 1) {
+      // Multiple conditions, use $and
+      finalQuery.$and = andConditions;
     }
 
     // All other filters are AND conditions (must all match)
@@ -876,14 +924,25 @@ router.post('/search', async (req, res) => {
       })
     );
 
+     // Filter out very low match scores (below threshold)
+    // Lower threshold since MongoDB query is already more accurate with AND/OR logic
+    const MINIMUM_MATCH_SCORE = 40; // Only return candidates with 40+ match score
+    const filteredResults = scoredResults.filter(result => {
+      // If matchScore is 0 (not scored), include it
+      // Otherwise, only include if score is above threshold
+      return result.matchScore === 0 || result.matchScore >= MINIMUM_MATCH_SCORE;
+    });
+
     // Sort by match score (highest first) if scores are available
-    scoredResults.sort((a, b) => {
+    filteredResults.sort((a, b) => {
       if (a.matchScore > 0 || b.matchScore > 0) {
         return b.matchScore - a.matchScore;
       }
       // If no scores, maintain original order (most recent first)
       return 0;
     });
+
+    console.log(`[CandidateSearch] Filtered ${scoredResults.length - filteredResults.length} candidates below score threshold`);
 
     // Create CandidateSearch record
     const candidateSearch = new CandidateSearch({
@@ -905,10 +964,12 @@ router.post('/search', async (req, res) => {
     res.json({
       query,
       explanation,
-      totalResults,
+      totalResults: filteredResults.length,
+      totalBeforeFiltering: totalResults,
       limit: parseInt(limit),
       skip: parseInt(skip),
-      results: scoredResults,
+      minimumMatchScore: MINIMUM_MATCH_SCORE,
+      results: filteredResults,
       searchId: candidateSearch._id, // Return search ID for future updates
     });
   } catch (error) {
