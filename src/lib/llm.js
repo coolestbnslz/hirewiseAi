@@ -322,6 +322,72 @@ Score should be higher if expectations align well with Indian market standards. 
 }
 
 /**
+ * Build prompt for AI tools compatibility analysis
+ */
+function buildAIToolsCompatibilityPrompt(payload) {
+  const { resumeText, githubData, portfolioUrl, parsedResume } = payload;
+
+  let prompt = `Analyze a candidate's compatibility with AI tools and usage based on their resume, GitHub profile, and portfolio.
+
+Evaluate how much the candidate has worked with AI/ML tools, frameworks, and technologies.
+
+RESUME DATA:
+${resumeText ? `Resume Text (first 3000 characters):
+${resumeText.substring(0, 3000)}${resumeText.length > 3000 ? '...' : ''}
+` : 'No resume text available.'}
+
+${parsedResume ? `Parsed Resume Data:
+${JSON.stringify(parsedResume, null, 2).substring(0, 2000)}${JSON.stringify(parsedResume).length > 2000 ? '...' : ''}
+` : ''}
+
+${githubData ? `GITHUB DATA:
+${githubData}
+` : 'No GitHub data available.'}
+
+${portfolioUrl ? `PORTFOLIO URL: ${portfolioUrl}
+` : 'No portfolio URL provided.'}
+
+Look for evidence of AI/ML tools and usage in:
+1. **Resume Content**:
+   - AI/ML frameworks: TensorFlow, PyTorch, Keras, Scikit-learn, XGBoost, etc.
+   - AI APIs: OpenAI API, Anthropic Claude, Google AI, AWS Bedrock, etc.
+   - AI Tools: LangChain, LlamaIndex, Hugging Face, Weights & Biases, MLflow, etc.
+   - AI Concepts: Machine Learning, Deep Learning, NLP, Computer Vision, LLMs, etc.
+   - AI Projects: Chatbots, recommendation systems, predictive models, etc.
+
+2. **GitHub Repositories**:
+   - Projects using AI/ML libraries
+   - Repositories with AI-related topics
+   - Contributions to AI/ML open-source projects
+   - AI model implementations or experiments
+
+3. **Portfolio**:
+   - AI-powered applications or demos
+   - AI/ML project showcases
+   - AI tool integrations
+
+Scoring Guidelines:
+- **90-100**: Extensive AI/ML experience with multiple tools, frameworks, and production projects
+- **70-89**: Strong AI/ML experience with several tools and meaningful projects
+- **50-69**: Moderate AI/ML experience with some tools and basic projects
+- **30-49**: Limited AI/ML experience with minimal tool usage
+- **0-29**: No or very minimal AI/ML experience
+
+Return a JSON object:
+{
+  "score": 0-100,
+  "analysis": "Detailed analysis of AI tools compatibility, mentioning specific tools, frameworks, and projects found",
+  "aiToolsFound": ["list of AI tools, frameworks, and technologies found"],
+  "aiProjectsFound": ["list of AI-related projects or work mentioned"],
+  "compatibilityLevel": "extensive" | "strong" | "moderate" | "limited" | "minimal"
+}
+
+Return ONLY valid JSON, no additional text.`;
+
+  return prompt;
+}
+
+/**
  * Build prompt for email generation
  */
 function buildEmailGeneratorPrompt(payload) {
@@ -338,22 +404,20 @@ function buildEmailGeneratorPrompt(payload) {
     jobDetails,
   } = payload;
 
-  let context = `Generate a personalized, professional email inviting a candidate to a video screening for Paytm (Indian fintech company).
+  let context = `Generate a SHORT, concise, professional email informing a candidate they are SHORTLISTED and that they will receive an AI-based phone interview call at Paytm (Indian fintech company).
 
 IMPORTANT CONTEXT:
 - Company: Paytm (leading Indian fintech company, based in Noida)
-- Use Indian English conventions and cultural context
-- Reference Paytm's position in Indian digital payments ecosystem
+- Use Indian English conventions
+- Keep the email BRIEF and to the point (maximum 3-4 short paragraphs)
+- The candidate has been SHORTLISTED for the role
+- MUST mention: "We will call you shortly for an AI-based phone interview" (or similar wording)
+- The interview is conducted by an AI assistant (not a human interviewer)
 - Use warm, professional tone appropriate for Indian corporate culture
-- Mention Paytm's impact on India's digital payment revolution if relevant
 
 Candidate: ${candidateName}
 Role: ${seniority ? seniority + ' ' : ''}${role}
 Company: ${company} (Paytm - Indian fintech)
-Screening Link: ${screening_link}
-
-Screening Questions: ${screening_questions?.length || 0} question(s)
-${screening_questions?.map((q, i) => `${i + 1}. ${q.text} (${q.time_limit_sec}s)`).join('\n') || 'None'}
 
 `;
 
@@ -361,45 +425,39 @@ ${screening_questions?.map((q, i) => `${i + 1}. ${q.text} (${q.time_limit_sec}s)
     context += `Candidate Scores:
 - Overall Match: ${scores.unifiedScore}%
 - Resume Score: ${scores.resumeScore}%
-- GitHub/Portfolio Score: ${scores.githubPortfolioScore}%
-- Compensation Score: ${scores.compensationScore}%
 
 `;
   }
 
-  if (resumeHighlights) {
-    context += `Resume Highlights:
-- Matched Skills: ${resumeHighlights.skills_matched?.join(', ') || 'None'}
-- Top Reasons: ${resumeHighlights.top_reasons?.join('; ') || 'None'}
+  if (resumeHighlights && resumeHighlights.skills_matched && resumeHighlights.skills_matched.length > 0) {
+    context += `Key Skills: ${resumeHighlights.skills_matched.slice(0, 3).join(', ')}
 
 `;
   }
 
-  if (userProfile) {
-    context += `Candidate Profile:
-- GitHub: ${userProfile.githubUrl || 'Not provided'}
-- Portfolio: ${userProfile.portfolioUrl || 'Not provided'}
-
-`;
-  }
-
-  context += `Generate a warm, professional email with Indian context. Make it personalized based on the candidate's scores and profile.
-The tone should be ${scores?.unifiedScore >= 85 ? 'enthusiastic' : scores?.unifiedScore >= 80 ? 'warm' : 'friendly'}.
+  context += `Email Structure (KEEP IT SHORT - 3-4 paragraphs max):
+1. Opening: Greet and inform they are SHORTLISTED for the ${role} position at Paytm
+2. Brief: Mention 1-2 key strengths briefly (if scores are good)
+3. Action: Inform "We will call you shortly for an AI-based phone interview"
+4. Closing: Professional closing with Paytm branding
 
 Email Guidelines:
+- Keep it CONCISE - maximum 150-200 words total
 - Use Indian English conventions
-- Reference Paytm's role in Indian fintech and digital payments
-- Mention Paytm's impact on India's digital economy
-- Use culturally appropriate greetings and closing
-- Keep it professional yet warm (Indian corporate style)
+- Mention "shortlisted" clearly
+- MUST mention "We will call you shortly for an AI-based phone interview" (exact wording or similar)
+- Professional yet warm tone
+- Do NOT include screening link or detailed questions
+- Do NOT write long paragraphs - keep each paragraph short (2-3 sentences max)
+- The interview is AI-based, so mention that clearly
 
 Return a JSON object:
 {
-  "subject": "Email subject line (with Paytm/Indian context)",
-  "preview_text": "Preview text (first 100 chars)",
-  "tone": "friendly" | "warm" | "enthusiastic",
-  "plain_text": "Full email text (plain text version) with Indian context",
-  "html_snippet": "HTML version of email body with Indian context"
+  "subject": "Short subject line mentioning shortlisting and phone interview",
+  "preview_text": "Preview text (first 80 chars)",
+  "tone": "professional",
+  "plain_text": "SHORT email text (150-200 words max) - mention shortlisted and phone interview",
+  "html_snippet": "SHORT HTML version (150-200 words max) - mention shortlisted and phone interview"
 }
 
 Return ONLY valid JSON, no additional text.`;
@@ -893,26 +951,34 @@ User's search query:
 Your task is to extract structured search criteria from the user's natural language query and create MongoDB query operators.
 
 IMPORTANT RULES:
-1. For skills/technologies, use the "tags" field with EXACT matching (case-insensitive)
+1. For JOB TITLES/ROLES, use the "jobTitle" field (NOT resumeKeywords)
+   - "HR Manager" should match ONLY "HR Manager" in resumes, NOT "Software Engineer", "Product Manager", "Engineering Manager", or any other role
+   - "Software Engineer" should match ONLY "Software Engineer", NOT "Senior Software Engineer" or "Lead Software Engineer" (unless query specifies "Senior" or "Lead")
+   - Extract the EXACT job title as specified in the query
+   - If query says "HR Managers", extract jobTitle: "HR Manager" (singular form is fine)
+   - Job titles are searched with EXACT phrase matching to avoid false positives
+2. For skills/technologies, use the "tags" field with EXACT matching (case-insensitive)
    - "java" should match "Java" but NOT "JavaScript"
    - "react" should match "React" but NOT "React Native" (unless explicitly mentioned)
    - Extract exact technology names as they appear in the query
-2. For text search in resume content, use "resumeText" field with word boundary matching
-   - "senior software engineer" should match the exact phrase, not just "software engineer"
+3. For other text search in resume content (NOT job titles), use "resumeKeywords" field with word boundary matching
+   - Location, experience keywords, industry terms go in resumeKeywords
    - "java" should match "Java" but NOT "JavaScript" (use word boundaries)
    - Extract exact phrases and keywords as they appear in the query
-3. For name search, use "name" field with $regex operator (case-insensitive)
-4. For email search, use "email" field with $regex operator (case-insensitive)
-5. For experience-related queries, search in "resumeText" using word boundaries
-6. For location-based queries, search in "resumeText" using word boundaries
-7. For compensation, use "compensationExpectation" field with $regex
-8. For hired status, use "isHired" field with boolean value
-9. For date ranges, use "createdAt" or "updatedAt" with $gte or $lte operators
+4. For name search, use "name" field with $regex operator (case-insensitive)
+5. For email search, use "email" field with $regex operator (case-insensitive)
+6. For experience-related queries, search in "resumeText" using word boundaries (put in resumeKeywords)
+7. For location-based queries, search in "resumeText" using word boundaries (put in resumeKeywords)
+8. For compensation, use "compensationExpectation" field with $regex
+9. For hired status, use "isHired" field with boolean value
+10. For date ranges, use "createdAt" or "updatedAt" with $gte or $lte operators
 
 CRITICAL: Avoid partial matches:
 - "java" should NOT match "javascript"
-- "senior software engineer" should NOT match "software engineer" alone
+- "HR Manager" should NOT match "Software Engineer" or any other job title
+- "Software Engineer" should NOT match "Senior Software Engineer" (unless query specifies "Senior")
 - Extract exact terms and phrases as specified in the query
+- ALWAYS extract job titles separately in the "jobTitle" field for exact matching
 
 MongoDB Query Operators you can use:
 - $in: for array fields like tags
@@ -927,8 +993,12 @@ Query: "Find React developers with Node.js experience"
 → Extract: tags: ["React", "Node.js"] (exact matches, case-insensitive)
 
 Query: "Senior software engineers in Bangalore"
-→ Extract: resumeKeywords: ["senior software engineer", "bangalore"], tags: ["Senior Software Engineer"]
-  Note: "senior software engineer" is a complete phrase, not just "software engineer"
+→ Extract: jobTitle: "Senior Software Engineer", resumeKeywords: ["bangalore"]
+  Note: Job title is extracted separately for exact matching. "Senior Software Engineer" should NOT match "Software Engineer" alone.
+
+Query: "HR Managers in Delhi with experience in tech recruitment"
+→ Extract: jobTitle: "HR Manager", resumeKeywords: ["delhi", "tech recruitment"]
+  Note: "HR Manager" should match ONLY "HR Manager" in resumes, NOT "Software Engineer", "Product Manager", or any other role.
 
 Query: "Python developers with 5+ years experience"
 → Extract: tags: ["Python"], resumeKeywords: ["5+ years", "5 years"]
@@ -980,7 +1050,14 @@ IMPORTANT:
 - Extract as many relevant search criteria as possible
 - Be smart about synonyms: "developer" = "engineer", "programmer", "coder"
 - For skills, extract both explicit and implicit skills mentioned
+- CRITICAL: If the query mentions a job title/role (e.g., "HR Manager", "Software Engineer", "Product Manager"), ALWAYS extract it in the "jobTitle" field, NOT in resumeKeywords
+- Job titles are searched with exact matching to prevent false positives (e.g., "HR Manager" should NOT match "Software Engineer")
 - If no clear criteria can be extracted, return empty searchCriteria object
+
+Examples:
+- Query: "HR Managers in Delhi" → jobTitle: "HR Manager", resumeKeywords: ["delhi"]
+- Query: "Software Engineers with React" → jobTitle: "Software Engineer", tags: ["React"]
+- Query: "Product Managers" → jobTitle: "Product Manager"
 
 Return ONLY valid JSON, no additional text.`;
 }
@@ -1265,7 +1342,7 @@ function getModelForTask(promptName) {
   }
   
   // Fast tasks - use faster/cheaper model
-  if (promptName === 'GITHUB_PORTFOLIO_SCORING' || promptName === 'COMPENSATION_ANALYSIS') {
+  if (promptName === 'GITHUB_PORTFOLIO_SCORING' || promptName === 'COMPENSATION_ANALYSIS' || promptName === 'AI_TOOLS_COMPATIBILITY') {
     return MODEL_CONFIG.FAST;
   }
 
@@ -1309,6 +1386,11 @@ export async function callLLM(promptName, payload) {
 
     case 'COMPENSATION_ANALYSIS':
       prompt = buildCompensationAnalysisPrompt(payload);
+      temperature = 0.4; // More objective analysis
+      break;
+
+    case 'AI_TOOLS_COMPATIBILITY':
+      prompt = buildAIToolsCompatibilityPrompt(payload);
       temperature = 0.4; // More objective analysis
       break;
 

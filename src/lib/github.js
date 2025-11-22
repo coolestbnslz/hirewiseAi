@@ -29,14 +29,33 @@ function getGitHubHeaders() {
 
 /**
  * Extract username from GitHub URL
- * @param {string} url - GitHub URL (e.g., https://github.com/username or https://github.com/username/repo)
+ * @param {string} url - GitHub URL (e.g., https://github.com/username, github.com/username, or just username)
  * @returns {string|null} - Username or null if invalid
  */
 export function extractGitHubUsername(url) {
   if (!url) return null;
   
+  // Trim whitespace
+  url = url.trim();
+  
+  // If it's just a username (no slashes, no dots, no protocol), return it directly
+  if (!url.includes('/') && !url.includes('.') && !url.includes('http')) {
+    // Basic validation: username should be alphanumeric with hyphens and underscores
+    if (/^[a-zA-Z0-9]([a-zA-Z0-9]|-(?![.-])){0,38}$/.test(url)) {
+      return url;
+    }
+  }
+  
+  // Normalize URL: add https:// if protocol is missing
+  let normalizedUrl = url;
+  if (!url.startsWith('http://') && !url.startsWith('https://')) {
+    normalizedUrl = `https://${url}`;
+  }
+  
   try {
-    const urlObj = new URL(url);
+    const urlObj = new URL(normalizedUrl);
+    
+    // Check if it's a GitHub domain
     if (urlObj.hostname !== 'github.com' && urlObj.hostname !== 'www.github.com') {
       return null;
     }
@@ -45,8 +64,17 @@ export function extractGitHubUsername(url) {
     const pathParts = urlObj.pathname.split('/').filter(p => p);
     if (pathParts.length === 0) return null;
     
+    // Return the first path part as username
     return pathParts[0];
   } catch (error) {
+    // If URL parsing fails, try to extract username from common patterns
+    // Pattern: github.com/username or www.github.com/username
+    const githubPattern = /(?:github\.com|www\.github\.com)[\/:]([a-zA-Z0-9]([a-zA-Z0-9]|-(?![.-])){0,38})/i;
+    const match = url.match(githubPattern);
+    if (match && match[1]) {
+      return match[1];
+    }
+    
     console.error('[GitHub] Error parsing URL:', error);
     return null;
   }
@@ -54,14 +82,21 @@ export function extractGitHubUsername(url) {
 
 /**
  * Fetch GitHub user profile and repositories
- * @param {string} githubUrl - GitHub profile URL
+ * @param {string} githubUrl - GitHub profile URL (supports: https://github.com/username, github.com/username, or just username)
  * @returns {Promise<Object>} - User profile and repositories data
  */
 export async function fetchGitHubData(githubUrl) {
+  if (!githubUrl || typeof githubUrl !== 'string') {
+    return { error: 'GitHub URL is required' };
+  }
+  
   const username = extractGitHubUsername(githubUrl);
   if (!username) {
-    return { error: 'Invalid GitHub URL' };
+    console.error(`[GitHub] Failed to extract username from: ${githubUrl}`);
+    return { error: `Invalid GitHub URL: ${githubUrl}. Expected format: https://github.com/username, github.com/username, or just username` };
   }
+  
+  console.log(`[GitHub] Extracted username: ${username} from URL: ${githubUrl}`);
 
   try {
     const headers = getGitHubHeaders();

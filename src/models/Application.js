@@ -36,6 +36,14 @@ const applicationSchema = new mongoose.Schema({
     compensationAnalysis: {
       type: String,
     },
+    aiToolsCompatibilityScore: {
+      type: Number,
+      min: 0,
+      max: 100,
+    },
+    aiToolsCompatibilityAnalysis: {
+      type: String,
+    },
   },
   unifiedScore: {
     type: Number,

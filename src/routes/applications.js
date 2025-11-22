@@ -114,8 +114,10 @@ router.get('/job/:jobId', async (req, res) => {
         resumeScore: app.scores?.resumeScore || null,
         githubPortfolioScore: app.scores?.githubPortfolioScore || null,
         compensationScore: app.scores?.compensationScore || null,
+        aiToolsCompatibilityScore: app.scores?.aiToolsCompatibilityScore || null,
         unifiedScore: app.unifiedScore || null,
         compensationAnalysis: app.scores?.compensationAnalysis || null,
+        aiToolsCompatibilityAnalysis: app.scores?.aiToolsCompatibilityAnalysis || null,
       },
       status: {
         level1Approved: app.level1_approved,
@@ -151,19 +153,22 @@ router.get('/job/:jobId', async (req, res) => {
 // Calculate unified score from individual scores
 function calculateUnifiedScore(scores) {
   const weights = {
-    resumeScore: 0.5,
-    githubPortfolioScore: 0.3,
-    compensationScore: 0.2,
+    resumeScore: 0.4,
+    githubPortfolioScore: 0.25,
+    compensationScore: 0.15,
+    aiToolsCompatibilityScore: 0.2,
   };
 
   const resumeScore = scores.resumeScore || 0;
   const githubPortfolioScore = scores.githubPortfolioScore || 0;
   const compensationScore = scores.compensationScore || 0;
+  const aiToolsCompatibilityScore = scores.aiToolsCompatibilityScore || 0;
 
   const unified = (
     resumeScore * weights.resumeScore +
     githubPortfolioScore * weights.githubPortfolioScore +
-    compensationScore * weights.compensationScore
+    compensationScore * weights.compensationScore +
+    aiToolsCompatibilityScore * weights.aiToolsCompatibilityScore
   );
 
   return Math.round(unified);
@@ -262,6 +267,7 @@ router.post('/:jobId', upload.single('resume'), async (req, res) => {
         resumeScore: 0,
         githubPortfolioScore: 0,
         compensationScore: 0,
+        aiToolsCompatibilityScore: 0,
       },
       unifiedScore: 0,
     });
@@ -519,6 +525,8 @@ async function processApplicationScoring(applicationId, jobId, userId, resumePat
     let linkedinSummary = '';
     let compensationScore = 0;
     let compensationAnalysis = '';
+    let aiToolsCompatibilityScore = 0;
+    let aiToolsCompatibilityAnalysis = '';
     
     // Score GitHub/Portfolio (if GitHub data was fetched or portfolio URL exists)
     if (githubDataFormatted || finalPortfolioUrl) {
@@ -582,6 +590,31 @@ async function processApplicationScoring(applicationId, jobId, userId, resumePat
           })
       );
     }
+
+    // Score AI Tools Compatibility (analyze resume, GitHub, and portfolio for AI/ML tools usage)
+    if (resumeText || githubDataFormatted || finalPortfolioUrl) {
+      scoringPromises.push(
+        callLLM('AI_TOOLS_COMPATIBILITY', {
+          resumeText: resumeText || '',
+          githubData: githubDataFormatted || '',
+          portfolioUrl: finalPortfolioUrl || '',
+          parsedResume: user.parsedResume || null,
+        })
+          .then(aiLLMResponse => {
+            const aiParsed = parseJsonSafely(aiLLMResponse);
+            if (aiParsed.ok) {
+              aiToolsCompatibilityScore = aiParsed.json.score || 0;
+              aiToolsCompatibilityAnalysis = aiParsed.json.analysis || '';
+              console.log(`[Application] AI Tools Compatibility Score: ${aiToolsCompatibilityScore}`);
+            } else {
+              console.error('[Application] Failed to parse AI Tools Compatibility response:', aiParsed.error);
+            }
+          })
+          .catch(error => {
+            console.error('[Application] Error analyzing AI tools compatibility:', error);
+          })
+      );
+    }
     
     // Wait for all scoring operations to complete in parallel
     await Promise.all(scoringPromises);
@@ -592,6 +625,8 @@ async function processApplicationScoring(applicationId, jobId, userId, resumePat
       githubPortfolioScore,
       compensationScore,
       compensationAnalysis,
+      aiToolsCompatibilityScore,
+      aiToolsCompatibilityAnalysis,
     };
     const unifiedScore = calculateUnifiedScore(scores);
 
@@ -677,6 +712,7 @@ router.post('/:id/approve-level1', async (req, res) => {
         resumeScore: application.scores?.resumeScore,
         githubPortfolioScore: application.scores?.githubPortfolioScore,
         compensationScore: application.scores?.compensationScore,
+        aiToolsCompatibilityScore: application.scores?.aiToolsCompatibilityScore,
         unifiedScore: application.unifiedScore,
         },
         // Resume highlights from LLM analysis
