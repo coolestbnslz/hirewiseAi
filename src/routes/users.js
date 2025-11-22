@@ -1075,6 +1075,7 @@ router.post('/search/:searchId/reject', async (req, res) => {
 router.get('/search/:searchId', async (req, res) => {
   try {
     const { searchId } = req.params;
+    const { status } = req.query; // Query param: 'shortlisted' or 'rejected'
 
     const candidateSearch = await CandidateSearch.findById(searchId)
       .populate('shortlistedUsers', 'name email phone tags')
@@ -1084,18 +1085,34 @@ router.get('/search/:searchId', async (req, res) => {
       return res.status(404).json({ error: 'Search not found' });
     }
 
-    res.json({
+    // Build response object
+    const response = {
       searchId: candidateSearch._id,
       searchText: candidateSearch.searchText,
       searchCriteria: candidateSearch.searchCriteria,
       explanation: candidateSearch.explanation,
       totalResults: candidateSearch.totalResults,
-      shortlistedUsers: candidateSearch.shortlistedUsers,
-      rejectedUsers: candidateSearch.rejectedUsers,
       resultsSnapshot: candidateSearch.resultsSnapshot,
       createdAt: candidateSearch.createdAt,
       updatedAt: candidateSearch.updatedAt,
-    });
+    };
+
+    // Filter response based on status query param
+    if (status === 'shortlisted') {
+      response.shortlistedUsers = candidateSearch.shortlistedUsers;
+      response.shortlistedCount = candidateSearch.shortlistedUsers?.length || 0;
+    } else if (status === 'rejected') {
+      response.rejectedUsers = candidateSearch.rejectedUsers;
+      response.rejectedCount = candidateSearch.rejectedUsers?.length || 0;
+    } else {
+      // Default: return both if no filter or invalid status
+      response.shortlistedUsers = candidateSearch.shortlistedUsers;
+      response.rejectedUsers = candidateSearch.rejectedUsers;
+      response.shortlistedCount = candidateSearch.shortlistedUsers?.length || 0;
+      response.rejectedCount = candidateSearch.rejectedUsers?.length || 0;
+    }
+
+    res.json(response);
   } catch (error) {
     console.error('Error fetching search:', error);
     res.status(500).json({ error: 'Internal server error', details: error.message });
