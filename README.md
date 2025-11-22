@@ -59,13 +59,13 @@ AWS_BEARER_TOKEN_BEDROCK=your_bearer_token
 BEDROCK_MODEL_ID=us.anthropic.claude-3-5-haiku-20241022-v1:0
 BEDROCK_EMBEDDING_MODEL_ID=amazon.titan-embed-text-v1
 
-# Mailgun Email Configuration (Recommended for cloud deployments)
-MAILGUN_API_KEY=your_mailgun_api_key
-MAILGUN_DOMAIN=your_domain.mailgun.org  # e.g., sandbox810adcb22549480181c20abf661a1b84.mailgun.org
-MAILGUN_FROM_EMAIL=your_email@your_domain.com  # or use Mailgun sandbox domain
-MAILGUN_FROM_NAME=HireWise Team
-# For EU domains, use: MAILGUN_URL=https://api.eu.mailgun.net
-# Optional: MAILGUN_SKIP_VERIFY=true to skip connection verification
+# SendGrid Email Configuration (Recommended for cloud deployments)
+# Get your API key from: https://app.sendgrid.com/settings/api_keys
+# Verify your sender identity at: https://app.sendgrid.com/settings/sender_auth
+SENDGRID_API_KEY=your_sendgrid_api_key  # Create API key with "Mail Send" > "Full Access" permissions
+SENDGRID_FROM_EMAIL=your_email@your_domain.com  # Must be a verified sender identity
+SENDGRID_FROM_NAME=HireWise Team  # Optional sender name
+# Optional: SENDGRID_SKIP_VERIFY=true to skip connection verification
 
 # GitHub API Configuration (optional but recommended)
 GITHUB_TOKEN=your_github_personal_access_token
@@ -91,16 +91,17 @@ WEBHOOK_BASE_URL=https://yourdomain.com  # Base URL for webhooks (optional)
    - Enable Bedrock access (request access to Claude models and Titan Embeddings)
    - Create a Bearer token in AWS Console → Amazon Bedrock → API Keys
    - Set `AWS_BEARER_TOKEN_BEDROCK` in your `.env` file
-3. **Email (Mailgun)**: 
-   - Sign up for a free Mailgun account at https://www.mailgun.com
-   - Get your API key from Mailgun Dashboard → Settings → API Keys
-   - Get your domain from Mailgun Dashboard (you can use the sandbox domain for testing)
-   - Set `MAILGUN_API_KEY` and `MAILGUN_DOMAIN` in your `.env` file
-   - Set `MAILGUN_FROM_EMAIL` (can use sandbox domain for testing)
-   - Set `MAILGUN_FROM_NAME` (optional)
-   - **For EU domains**: Set `MAILGUN_URL=https://api.eu.mailgun.net`
+3. **Email (SendGrid)**: 
+   - Sign up for a free SendGrid account at https://sendgrid.com (free tier: 100 emails/day for 60 days)
+   - Enable Two-factor authentication (required by SendGrid)
+   - Create an API key from SendGrid Dashboard → Settings → API Keys → Create API Key
+   - Set permissions to "Mail Send" > "Full Access"
+   - Verify your Sender Identity (Domain Authentication recommended, or Single Sender Verification for testing)
+   - Set `SENDGRID_API_KEY` in your `.env` file
+   - Set `SENDGRID_FROM_EMAIL` (must be from a verified sender identity)
+   - Set `SENDGRID_FROM_NAME` (optional, e.g., "HireWise Team")
    - If not configured, the system will work but emails won't be sent
-   - **Note**: Mailgun is recommended for cloud deployments (Railway, Heroku, etc.) as it avoids SMTP port blocking issues
+   - **Note**: SendGrid is recommended for cloud deployments (Railway, Heroku, etc.) as it avoids SMTP port blocking issues
 4. **GitHub API (Optional but Recommended)**:
    - Create a GitHub Personal Access Token (PAT) with `public_repo` scope
    - Go to GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic)
@@ -646,12 +647,11 @@ SMTP_USERNAME=apikey
 SMTP_PASSWORD=your_sendgrid_api_key
 ```
 
-**Mailgun SMTP:**
+**SendGrid Email Service:**
 ```bash
-SMTP_HOST=smtp.mailgun.org
-SMTP_PORT=587
-SMTP_USERNAME=your_mailgun_username
-SMTP_PASSWORD=your_mailgun_password
+SENDGRID_API_KEY=your_sendgrid_api_key
+SENDGRID_FROM_EMAIL=your_email@your_domain.com
+SENDGRID_FROM_NAME=HireWise Team
 ```
 
 **Note:** If SMTP credentials are not configured, the system will log warnings but continue to function (emails won't be sent).

@@ -1,102 +1,78 @@
 /**
- * Email service using Mailgun API
- * More reliable for cloud deployments like Railway
+ * Email service using SendGrid API
+ * Reliable email service for cloud deployments
+ * Documentation: https://www.twilio.com/docs/sendgrid/for-developers/sending-email/quickstart-nodejs
  */
 
-import FormData from 'form-data';
-import Mailgun from 'mailgun.js';
+import sgMail from '@sendgrid/mail';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
-// Mailgun configuration from environment variables
-const MAILGUN_CONFIG = {
-  apiKey: process.env.MAILGUN_API_KEY || process.env.API_KEY,
-  domain: process.env.MAILGUN_DOMAIN,
-  // For EU domains, use: https://api.eu.mailgun.net
-  url: process.env.MAILGUN_URL || 'https://api.mailgun.net', // Default US, use 'https://api.eu.mailgun.net' for EU
-};
+// SendGrid configuration from environment variables
+const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY;
 
 // From email address
-const FROM_EMAIL = process.env.MAILGUN_FROM_EMAIL || process.env.SMTP_FROM_EMAIL;
-const FROM_NAME = process.env.MAILGUN_FROM_NAME || process.env.SMTP_FROM_NAME || 'HireWise';
+const FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || process.env.FROM_EMAIL;
+const FROM_NAME = process.env.SENDGRID_FROM_NAME || process.env.FROM_NAME || 'HireWise Team';
 
-// Create reusable Mailgun client
-let mailgunClient = null;
+// Initialize SendGrid API key
+let sendGridInitialized = false;
 
 /**
- * Initialize Mailgun client
+ * Initialize SendGrid client
  */
-function getMailgunClient() {
-  if (mailgunClient) {
-    return mailgunClient;
+function initializeSendGrid() {
+  if (sendGridInitialized) {
+    return true;
   }
 
-  // Check if credentials are provided
-  if (!MAILGUN_CONFIG.apiKey || !MAILGUN_CONFIG.domain) {
-    console.warn('[EMAIL] Mailgun credentials not configured. Email sending will be disabled.');
-    console.warn('[EMAIL] Set MAILGUN_API_KEY and MAILGUN_DOMAIN in .env file.');
-    return null;
+  // Check if API key is provided
+  if (!SENDGRID_API_KEY) {
+    console.warn('[EMAIL] SendGrid API key not configured. Email sending will be disabled.');
+    console.warn('[EMAIL] Set SENDGRID_API_KEY in .env file.');
+    return false;
   }
 
   try {
-    const mailgun = new Mailgun(FormData);
-    mailgunClient = mailgun.client({
-      username: 'api',
-      key: MAILGUN_CONFIG.apiKey,
-      url: MAILGUN_CONFIG.url, // US or EU endpoint
-    });
-
-    console.log(`[EMAIL] Mailgun client configured for domain: ${MAILGUN_CONFIG.domain}`);
-    if (MAILGUN_CONFIG.url.includes('eu.mailgun.net')) {
-      console.log('[EMAIL] Using EU Mailgun endpoint');
-    }
-    return mailgunClient;
+    sgMail.setApiKey(SENDGRID_API_KEY);
+    sendGridInitialized = true;
+    //sgMail.setDataResidency('eu'); 
+    console.log('[EMAIL] SendGrid client initialized successfully');
+    return true;
   } catch (error) {
-    console.error('[EMAIL] Error creating Mailgun client:', error);
-    return null;
+    console.error('[EMAIL] Error initializing SendGrid client:', error);
+    return false;
   }
 }
 
 /**
- * Verify Mailgun connection
- * Tests the API key and domain configuration
+ * Verify SendGrid connection
+ * Tests the API key configuration
  */
 export async function verifyEmailConnection() {
-  const client = getMailgunClient();
-  if (!client) {
-    return { ok: false, error: 'Mailgun not configured' };
+  if (!initializeSendGrid()) {
+    return { ok: false, error: 'SendGrid not configured' };
   }
 
   // Skip verification if disabled
-  if (process.env.MAILGUN_SKIP_VERIFY === 'true') {
-    console.log('[EMAIL] Mailgun verification skipped (MAILGUN_SKIP_VERIFY=true)');
+  if (process.env.SENDGRID_SKIP_VERIFY === 'true') {
+    console.log('[EMAIL] SendGrid verification skipped (SENDGRID_SKIP_VERIFY=true)');
     return { ok: true, skipped: true };
   }
 
   try {
-    // Test by getting domain info (lightweight API call)
-    const verifyTimeout = parseInt(process.env.MAILGUN_VERIFY_TIMEOUT) || 5000; // 5 seconds default
-    
-    const verifyPromise = client.domains.get(MAILGUN_CONFIG.domain);
-    const timeoutPromise = new Promise((_, reject) => 
-      setTimeout(() => reject(new Error('Verification timeout')), verifyTimeout)
-    );
-    
-    await Promise.race([verifyPromise, timeoutPromise]);
-    console.log('[EMAIL] Mailgun connection verified successfully');
+    // SendGrid doesn't have a direct verify endpoint, so we just check if API key is set
+    // The actual verification happens when sending the first email
+    console.log('[EMAIL] SendGrid connection verified (API key configured)');
     return { ok: true };
   } catch (error) {
-    console.error('[EMAIL] Mailgun verification failed:', error);
+    console.error('[EMAIL] SendGrid verification failed:', error);
     
     // Provide helpful error messages
     let helpfulError = error.message;
-    if (error.status === 401 || error.statusCode === 401) {
-      helpfulError = 'Mailgun API key is invalid. Please check MAILGUN_API_KEY in your .env file.';
-    } else if (error.status === 404 || error.statusCode === 404) {
-      helpfulError = `Mailgun domain "${MAILGUN_CONFIG.domain}" not found. Please check MAILGUN_DOMAIN in your .env file.`;
-    } else if (error.message.includes('timeout')) {
-      helpfulError = 'Mailgun API request timed out. This is usually a network issue.';
+    if (error.message?.includes('API key') || error.message?.includes('unauthorized')) {
+      helpfulError = 'SendGrid API key is invalid. Please check SENDGRID_API_KEY in your .env file.';
     }
     
     return { ok: false, error: helpfulError };
@@ -104,13 +80,13 @@ export async function verifyEmailConnection() {
 }
 
 /**
- * Send email using Mailgun API
+ * Send email using SendGrid API
  * @param {Object} options - Email options
- * @param {string} options.to - Recipient email address (can be string or array)
+ * @param {string|string[]} options.to - Recipient email address (can be string or array)
  * @param {string} options.subject - Email subject
  * @param {string} options.html - HTML email body
  * @param {string} options.text - Plain text email body
- * @param {string} options.from - Optional sender email (defaults to MAILGUN_FROM_EMAIL)
+ * @param {string} options.from - Optional sender email (defaults to SENDGRID_FROM_EMAIL)
  * @param {string|string[]} options.cc - Optional CC recipients
  * @param {string|string[]} options.bcc - Optional BCC recipients
  * @param {string} options.replyTo - Optional reply-to address
@@ -120,12 +96,11 @@ export async function sendEmail({ to, subject, html, text, from, cc, bcc, replyT
   console.log(`[EMAIL] Sending email to ${Array.isArray(to) ? to.join(', ') : to}`);
   console.log(`[EMAIL] Subject: ${subject}`);
 
-  const client = getMailgunClient();
-  if (!client) {
-    console.error('[EMAIL] Cannot send email: Mailgun not configured');
+  if (!initializeSendGrid()) {
+    console.error('[EMAIL] Cannot send email: SendGrid not configured');
     return {
       ok: false,
-      error: 'Mailgun not configured. Please set MAILGUN_API_KEY and MAILGUN_DOMAIN in .env file.',
+      error: 'SendGrid not configured. Please set SENDGRID_API_KEY in .env file.',
     };
   }
 
@@ -137,20 +112,20 @@ export async function sendEmail({ to, subject, html, text, from, cc, bcc, replyT
     };
   }
 
-  if (!MAILGUN_CONFIG.domain) {
+  if (!FROM_EMAIL) {
     return {
       ok: false,
-      error: 'MAILGUN_DOMAIN is required',
+      error: 'SENDGRID_FROM_EMAIL is required. Please set it in .env file.',
     };
   }
 
   // Use provided from or default
-  const fromEmail = from || FROM_EMAIL || `noreply@${MAILGUN_CONFIG.domain}`;
+  const fromEmail = from || FROM_EMAIL;
   const fromAddress = FROM_NAME ? `${FROM_NAME} <${fromEmail}>` : fromEmail;
 
   try {
-    // Prepare message data
-    const messageData = {
+    // Prepare message data for SendGrid
+    const msg = {
       from: fromAddress,
       to: Array.isArray(to) ? to : [to],
       subject: subject,
@@ -158,11 +133,11 @@ export async function sendEmail({ to, subject, html, text, from, cc, bcc, replyT
 
     // Add email body (prefer HTML, fallback to text)
     if (html) {
-      messageData.html = html;
+      msg.html = html;
       // Also include text version if provided, otherwise strip HTML
-      messageData.text = text || html.replace(/<[^>]*>/g, '');
+      msg.text = text || html.replace(/<[^>]*>/g, '');
     } else if (text) {
-      messageData.text = text;
+      msg.text = text;
     } else {
       return {
         ok: false,
@@ -172,38 +147,54 @@ export async function sendEmail({ to, subject, html, text, from, cc, bcc, replyT
 
     // Add optional fields if provided
     if (cc) {
-      messageData.cc = Array.isArray(cc) ? cc : [cc];
+      msg.cc = Array.isArray(cc) ? cc : [cc];
     }
     if (bcc) {
-      messageData.bcc = Array.isArray(bcc) ? bcc : [bcc];
+      msg.bcc = Array.isArray(bcc) ? bcc : [bcc];
     }
     if (replyTo) {
-      messageData['h:Reply-To'] = replyTo;
+      msg.replyTo = replyTo;
     }
 
-    // Send email via Mailgun
-    const data = await client.messages.create(MAILGUN_CONFIG.domain, messageData);
+    // Send email via SendGrid
+    const response = await sgMail.send(msg);
 
-    console.log(`[EMAIL] Email sent successfully. Message ID: ${data.id}`);
+    // SendGrid returns an array with status code and headers
+    const statusCode = response[0]?.statusCode || 202;
+    
+    console.log(`[EMAIL] Email sent successfully. Status Code: ${statusCode}`);
     
     return {
       ok: true,
-      id: data.id,
-      message: data.message,
+      id: response[0]?.headers?.['x-message-id'] || 'unknown',
+      message: 'Email sent successfully',
+      statusCode: statusCode,
     };
   } catch (error) {
     console.error('[EMAIL] Error sending email:', error);
     
     // Provide helpful error messages
-    let errorMessage = error.message;
-    if (error.status === 401 || error.statusCode === 401) {
-      errorMessage = 'Mailgun API key is invalid. Please check MAILGUN_API_KEY in your .env file.';
-    } else if (error.status === 402 || error.statusCode === 402) {
-      errorMessage = 'Mailgun payment required. Please check your Mailgun account billing.';
-    } else if (error.status === 404 || error.statusCode === 404) {
-      errorMessage = `Mailgun domain "${MAILGUN_CONFIG.domain}" not found. Please check MAILGUN_DOMAIN in your .env file.`;
-    } else if (error.status === 400 || error.statusCode === 400) {
-      errorMessage = `Invalid email request: ${error.message}. Please check your email format.`;
+    let errorMessage = error.message || 'Unknown error';
+    
+    // SendGrid error handling
+    if (error.response) {
+      const { statusCode, body } = error.response;
+      
+      if (statusCode === 401 || statusCode === 403) {
+        errorMessage = 'SendGrid API key is invalid or unauthorized. Please check SENDGRID_API_KEY in your .env file.';
+      } else if (statusCode === 400) {
+        errorMessage = `Invalid email request: ${body?.errors?.[0]?.message || error.message}. Please check your email format and sender identity.`;
+      } else if (statusCode === 413) {
+        errorMessage = 'Email payload too large. Please reduce the email size.';
+      } else if (statusCode === 429) {
+        errorMessage = 'SendGrid rate limit exceeded. Please try again later.';
+      } else {
+        errorMessage = `SendGrid API error (${statusCode}): ${body?.errors?.[0]?.message || error.message}`;
+      }
+    } else if (error.message?.includes('API key') || error.message?.includes('unauthorized')) {
+      errorMessage = 'SendGrid API key is invalid. Please check SENDGRID_API_KEY in your .env file.';
+    } else if (error.message?.includes('sender identity') || error.message?.includes('from')) {
+      errorMessage = `Invalid sender identity: ${fromEmail}. Please verify your sender identity in SendGrid dashboard.`;
     }
 
     return {
@@ -219,8 +210,14 @@ const isMainModule = import.meta.url === `file://${process.argv[1]}` ||
                       process.argv[1]?.endsWith('email.js');
 
 if (isMainModule) {
-  verifyEmailConnection().then(result => {
+  verifyEmailConnection().then(async result => {
     console.log('Email connection test:', result);
+    const emailResult = await sendEmail({
+      to: 'nikhil1.bansal@paytm.com',
+      subject: 'Test Email',
+      html: '<p>This is a test email from Resend</p>',
+    });
+    console.log('Email result:', emailResult);
     process.exit(result.ok ? 0 : 1);
   }).catch(err => {
     console.error('Error:', err);

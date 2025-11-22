@@ -50,8 +50,8 @@ async function startServer() {
     await connectDB();
     
     // Verify email connection (non-blocking, with timeout)
-    // Skip verification in cloud environments if MAILGUN_SKIP_VERIFY is set
-    if (process.env.MAILGUN_SKIP_VERIFY !== 'true') {
+    // Skip verification in cloud environments if SENDGRID_SKIP_VERIFY is set
+    if (process.env.SENDGRID_SKIP_VERIFY !== 'true') {
       const verifyPromise = verifyEmailConnection();
       const timeoutPromise = new Promise((resolve) => 
         setTimeout(() => resolve({ ok: false, error: 'Verification timeout (skipped)' }), 3000)
@@ -69,18 +69,18 @@ async function startServer() {
             if (result.error && !result.error.includes('not configured') && !result.error.includes('timeout')) {
               console.warn('[Server] Error:', result.error);
             } else if (result.error && result.error.includes('timeout')) {
-              console.warn('[Server] Mailgun connection timeout. Set MAILGUN_SKIP_VERIFY=true to skip verification.');
+              console.warn('[Server] SendGrid connection timeout. Set SENDGRID_SKIP_VERIFY=true to skip verification.');
             } else {
-              console.warn('[Server] Set MAILGUN_API_KEY and MAILGUN_DOMAIN in .env to enable email sending');
+              console.warn('[Server] Set SENDGRID_API_KEY and SENDGRID_FROM_EMAIL in .env to enable email sending');
             }
           }
         }
       }).catch(err => {
         console.warn('[Server] Email verification error:', err.message);
-        console.warn('[Server] Email sending may still work. Set MAILGUN_SKIP_VERIFY=true to skip verification.');
+        console.warn('[Server] Email sending may still work. Set SENDGRID_SKIP_VERIFY=true to skip verification.');
       });
     } else {
-      console.log('[Server] ℹ️  Email verification skipped (MAILGUN_SKIP_VERIFY=true)');
+      console.log('[Server] ℹ️  Email verification skipped (SENDGRID_SKIP_VERIFY=true)');
     }
     
     app.listen(PORT, () => {
