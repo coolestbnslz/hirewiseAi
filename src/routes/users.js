@@ -13,6 +13,34 @@ import { readFileAsText } from '../lib/storage.js';
 
 const router = express.Router();
 
+/**
+ * Calculate unified score from individual scores (same as in applications)
+ * @param {Object} scores - Object containing individual scores
+ * @returns {Number} Unified score (0-100)
+ */
+function calculateUnifiedScore(scores) {
+  const weights = {
+    resumeScore: 0.4,
+    githubPortfolioScore: 0.25,
+    compensationScore: 0.15,
+    aiToolsCompatibilityScore: 0.2,
+  };
+
+  const resumeScore = scores.resumeScore || 0;
+  const githubPortfolioScore = scores.githubPortfolioScore || 0;
+  const compensationScore = scores.compensationScore || 0;
+  const aiToolsCompatibilityScore = scores.aiToolsCompatibilityScore || 0;
+
+  const unified = (
+    resumeScore * weights.resumeScore +
+    githubPortfolioScore * weights.githubPortfolioScore +
+    compensationScore * weights.compensationScore +
+    aiToolsCompatibilityScore * weights.aiToolsCompatibilityScore
+  );
+
+  return Math.round(unified * 100) / 100; // Round to 2 decimal places
+}
+
 // GET /api/users/:id/resume - Download user's resume (must come before /:id route)
 router.get('/:id/resume', async (req, res) => {
   try {
@@ -809,6 +837,7 @@ router.post('/search', async (req, res) => {
     const scoredResults = await Promise.all(
       results.map(async (user) => {
         let matchScore = 0;
+        let resumeScore = 0;
         let skillsMatched = [];
         let skillsMissing = [];
         let topReasons = [];
@@ -817,6 +846,8 @@ router.post('/search', async (req, res) => {
         let githubPortfolioSummary = '';
         let compensationScore = 0;
         let compensationAnalysis = '';
+        let aiToolsCompatibilityScore = 0;
+        let aiToolsCompatibilityAnalysis = '';
 
         // Extract GitHub URL from parsedResume if not provided directly
         let finalGithubUrl = user.githubUrl;
@@ -832,11 +863,21 @@ router.post('/search', async (req, res) => {
           console.log(`[CandidateSearch] Extracted portfolio URL from parsed resume for ${user.name}: ${finalPortfolioUrl}`);
         }
 
-        // Parallel scoring: Resume scoring, GitHub/Portfolio scoring, Compensation analysis
+        // Parallel scoring: Resume scoring, GitHub/Portfolio scoring, Compensation analysis, AI Tools Compatibility
         const scoringPromises = [];
 
-        // Resume scoring
+        // Create a mock job object for scoring (using search criteria)
+        const mockJob = {
+          role: searchCriteria.role || 'Position',
+          company_name: 'Paytm',
+          must_have_skills: searchCriteria.tags || [],
+          nice_to_have: [],
+          enhanced_jd: query,
+        };
+
+        // Resume scoring (for match score and skills analysis)
         if (user.resumeText && user.resumeText.trim().length > 0) {
+          // Candidate search scoring (for match score and skills)
           scoringPromises.push(
             callLLM('CANDIDATE_SEARCH_SCORING', {
               resumeText: user.resumeText,
@@ -851,17 +892,37 @@ router.post('/search', async (req, res) => {
                   skillsMissing = scoringParsed.json.skills_missing || [];
                   topReasons = scoringParsed.json.top_reasons || [];
                   recommendedAction = scoringParsed.json.recommended_action || null;
-                  console.log(`[CandidateSearch] Scored candidate ${user.name}: ${matchScore}`);
+                  console.log(`[CandidateSearch] Match score for ${user.name}: ${matchScore}`);
                 } else {
-                  console.error(`[CandidateSearch] Failed to parse scoring for ${user.name}:`, scoringParsed.error);
+                  console.error(`[CandidateSearch] Failed to parse match scoring for ${user.name}:`, scoringParsed.error);
                 }
               })
               .catch(error => {
-                console.error(`[CandidateSearch] Error scoring candidate ${user.name}:`, error);
+                console.error(`[CandidateSearch] Error in match scoring for ${user.name}:`, error);
+              })
+          );
+
+          // Resume scoring (for resume score - same as in applications)
+          scoringPromises.push(
+            callLLM('RESUME_SCORING', {
+              resumeText: user.resumeText,
+              job: mockJob,
+            })
+              .then(resumeScoringResponse => {
+                const resumeParsed = parseJsonSafely(resumeScoringResponse);
+                if (resumeParsed.ok) {
+                  resumeScore = resumeParsed.json.match_score || 0;
+                  console.log(`[CandidateSearch] Resume score for ${user.name}: ${resumeScore}`);
+                } else {
+                  console.error(`[CandidateSearch] Failed to parse resume scoring for ${user.name}:`, resumeParsed.error);
+                }
+              })
+              .catch(error => {
+                console.error(`[CandidateSearch] Error in resume scoring for ${user.name}:`, error);
               })
           );
         } else {
-          console.log(`[CandidateSearch] Skipping resume score for ${user.name}: no resume text`);
+          console.log(`[CandidateSearch] Skipping resume scoring for ${user.name}: no resume text`);
         }
 
         // GitHub/Portfolio scoring
@@ -878,15 +939,6 @@ router.post('/search', async (req, res) => {
         }
 
         if (githubDataFormatted || finalPortfolioUrl) {
-          // Create a mock job object for GitHub/Portfolio scoring (using search criteria)
-          const mockJob = {
-            role: searchCriteria.role || 'Position',
-            company_name: 'Paytm',
-            must_have_skills: searchCriteria.tags || [],
-            nice_to_have: [],
-            enhanced_jd: query,
-          };
-
           scoringPromises.push(
             callLLM('GITHUB_PORTFOLIO_SCORING', {
               githubData: githubDataFormatted,
@@ -934,8 +986,42 @@ router.post('/search', async (req, res) => {
           );
         }
 
+        // AI Tools Compatibility scoring (analyze resume, GitHub, and portfolio for AI/ML tools usage)
+        if (user.resumeText || githubDataFormatted || finalPortfolioUrl) {
+          scoringPromises.push(
+            callLLM('AI_TOOLS_COMPATIBILITY', {
+              resumeText: user.resumeText || '',
+              githubData: githubDataFormatted || '',
+              portfolioUrl: finalPortfolioUrl || '',
+              parsedResume: user.parsedResume || null,
+            })
+              .then(aiLLMResponse => {
+                const aiParsed = parseJsonSafely(aiLLMResponse);
+                if (aiParsed.ok) {
+                  aiToolsCompatibilityScore = aiParsed.json.score || 0;
+                  aiToolsCompatibilityAnalysis = aiParsed.json.analysis || '';
+                  console.log(`[CandidateSearch] AI Tools Compatibility Score for ${user.name}: ${aiToolsCompatibilityScore}`);
+                } else {
+                  console.error(`[CandidateSearch] Failed to parse AI Tools Compatibility response for ${user.name}:`, aiParsed.error);
+                }
+              })
+              .catch(error => {
+                console.error(`[CandidateSearch] Error analyzing AI tools compatibility for ${user.name}:`, error);
+              })
+          );
+        }
+
         // Wait for all scoring operations to complete
         await Promise.all(scoringPromises);
+
+        // Calculate unified score
+        const scores = {
+          resumeScore,
+          githubPortfolioScore,
+          compensationScore,
+          aiToolsCompatibilityScore,
+        };
+        const unifiedScore = calculateUnifiedScore(scores);
 
         return {
           id: user._id,
@@ -954,7 +1040,8 @@ router.post('/search', async (req, res) => {
           resumeSummary: user.resumeSummary,
           parsedResume: user.parsedResume,
           // Scoring information
-          matchScore,
+          matchScore, // Legacy match score from CANDIDATE_SEARCH_SCORING
+          resumeScore, // Resume score from RESUME_SCORING (0-100)
           skillsMatched,
           skillsMissing,
           topReasons,
@@ -963,21 +1050,28 @@ router.post('/search', async (req, res) => {
           githubPortfolioSummary,
           compensationScore,
           compensationAnalysis,
+          aiToolsCompatibilityScore,
+          aiToolsCompatibilityAnalysis,
+          unifiedScore, // Overall unified score (weighted average)
         };
       })
     );
 
-     // Filter out very low match scores (below threshold)
-    // Lower threshold since MongoDB query is already more accurate with AND/OR logic
-    const MINIMUM_MATCH_SCORE = 40; // Only return candidates with 40+ match score
+     // Filter out very low unified scores (below threshold)
+    // Use unifiedScore for filtering and sorting (more accurate than matchScore alone)
+    const MINIMUM_UNIFIED_SCORE = 40; // Only return candidates with 40+ unified score
     const filteredResults = scoredResults.filter(result => {
-      // If matchScore is 0 (not scored), include it
-      // Otherwise, only include if score is above threshold
-      return result.matchScore === 0 || result.matchScore >= MINIMUM_MATCH_SCORE;
+      // If unifiedScore is 0 (not scored), include it
+      // Otherwise, only include if unified score is above threshold
+      return result.unifiedScore === 0 || result.unifiedScore >= MINIMUM_UNIFIED_SCORE;
     });
 
-    // Sort by match score (highest first) if scores are available
+    // Sort by unified score (highest first) if scores are available
     filteredResults.sort((a, b) => {
+      if (a.unifiedScore > 0 || b.unifiedScore > 0) {
+        return b.unifiedScore - a.unifiedScore;
+      }
+      // If no unified scores, fall back to matchScore
       if (a.matchScore > 0 || b.matchScore > 0) {
         return b.matchScore - a.matchScore;
       }
@@ -996,6 +1090,11 @@ router.post('/search', async (req, res) => {
       resultsSnapshot: scoredResults.slice(0, 20).map(result => ({
         userId: result.id,
         matchScore: result.matchScore,
+        resumeScore: result.resumeScore,
+        githubPortfolioScore: result.githubPortfolioScore,
+        compensationScore: result.compensationScore,
+        aiToolsCompatibilityScore: result.aiToolsCompatibilityScore,
+        unifiedScore: result.unifiedScore,
         skillsMatched: result.skillsMatched,
         recommendedAction: result.recommendedAction,
       })),
@@ -1011,7 +1110,7 @@ router.post('/search', async (req, res) => {
       totalBeforeFiltering: totalResults,
       limit: parseInt(limit),
       skip: parseInt(skip),
-      minimumMatchScore: MINIMUM_MATCH_SCORE,
+      minimumUnifiedScore: MINIMUM_UNIFIED_SCORE,
       results: filteredResults,
       searchId: candidateSearch._id, // Return search ID for future updates
     });

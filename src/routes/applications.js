@@ -73,7 +73,7 @@ router.get('/job/:jobId', async (req, res) => {
 
     // Fetch applications with populated user data
     const applications = await Application.find(query)
-      .populate('userId', 'name email phone githubUrl portfolioUrl linkedinUrl compensationExpectation tags resumeSummary parsedResume currentTenure totalExperience isRecentSwitcher currentCompany lastJobSwitchDate')
+      .populate('userId', 'name email phone githubUrl portfolioUrl linkedinUrl compensationExpectation tags resumeSummary parsedResume currentTenure totalExperience isRecentSwitcher currentCompany lastJobSwitchDate phoneInterviewSummaries isRecentSwitcher')
       .populate('matchId', 'matchScore status')
       .sort(sort)
       .limit(parseInt(limit))
@@ -105,6 +105,8 @@ router.get('/job/:jobId', async (req, res) => {
           isRecentSwitcher: app.userId?.isRecentSwitcher || false,
           currentCompany: app.userId?.currentCompany || null,
           lastJobSwitchDate: app.userId?.lastJobSwitchDate || null,
+          phoneInterviewSummaries: app.userId?.phoneInterviewSummaries || [],
+          isRecentSwitcher: app.userId?.isRecentSwitcher || false,
         },
       skillsMatched: app.skillsMatched || [],
       skillsMissing: app.skillsMissing || [],
