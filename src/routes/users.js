@@ -393,13 +393,25 @@ router.post('/:userId/phone-call-webhook', async (req, res) => {
       return res.status(404).send('User not found');
     }
 
-    // Get the most recent phone interview summary
+    // Get the phone interview summary - match by call_id if provided, otherwise use most recent
     if (!user.phoneInterviewSummaries || user.phoneInterviewSummaries.length === 0) {
       console.error(`[User] No phone interview summaries found for user ${userId}`);
       return res.status(400).send('No phone interview found');
     }
 
-    const lastInterview = user.phoneInterviewSummaries[user.phoneInterviewSummaries.length - 1];
+    // Try to find interview by call_id if provided
+    let lastInterview = null;
+    if (webhookData.call_id) {
+      lastInterview = user.phoneInterviewSummaries.find(
+        summary => summary.callId === webhookData.call_id || summary.callId === webhookData.call_id?.toString()
+      );
+    }
+    
+    // Fallback to most recent if no match found
+    if (!lastInterview) {
+      lastInterview = user.phoneInterviewSummaries[user.phoneInterviewSummaries.length - 1];
+      console.log(`[User] No matching call_id found, using most recent interview`);
+    }
 
     // Helper function to map Bland AI status to internal status
     function mapBlandStatusToInternal(blandStatus) {
@@ -434,9 +446,21 @@ router.post('/:userId/phone-call-webhook', async (req, res) => {
       console.log(`[User] Recording URL received: ${webhookData.recording_url}`);
     }
     
-    // Update transcript if available
+    // Update transcript if available (handle both string and array formats)
     if (webhookData.transcript) {
-      lastInterview.transcript = webhookData.transcript;
+      if (Array.isArray(webhookData.transcript)) {
+        // Convert transcript array to formatted string
+        const transcriptText = webhookData.transcript
+          .map(msg => {
+            const speaker = msg.user === 'assistant' ? 'Interviewer' : 'Candidate';
+            const timestamp = msg.created_at ? new Date(msg.created_at).toISOString() : '';
+            return `[${timestamp}] ${speaker}: ${msg.text || ''}`;
+          })
+          .join('\n\n');
+        lastInterview.transcript = transcriptText;
+      } else {
+        lastInterview.transcript = webhookData.transcript;
+      }
     }
     
     // Update summary if available
@@ -444,14 +468,33 @@ router.post('/:userId/phone-call-webhook', async (req, res) => {
       lastInterview.summary = webhookData.summary;
     }
     
-    // Update analysis if available
+    // Update analysis if available (handle both object and string formats)
     if (webhookData.analysis) {
-      lastInterview.analysis = webhookData.analysis;
+      if (typeof webhookData.analysis === 'object') {
+        lastInterview.analysis = {
+          technical_skills: webhookData.analysis.technical_skills || [],
+          behavioral_traits: webhookData.analysis.behavioral_traits || [],
+          communication_quality: webhookData.analysis.communication_quality || null,
+          overall_fit: webhookData.analysis.overall_fit || null,
+          strengths: webhookData.analysis.strengths || [],
+          concerns: webhookData.analysis.concerns || [],
+        };
+      } else {
+        // If analysis is a string, try to parse it or store as summary
+        lastInterview.summary = webhookData.analysis;
+      }
     }
     
-    // Update duration if available
+    // Update duration if available (handle corrected_duration as well)
     if (webhookData.duration) {
-      lastInterview.duration = webhookData.duration;
+      lastInterview.duration = parseInt(webhookData.duration, 10);
+    } else if (webhookData.corrected_duration) {
+      lastInterview.duration = parseInt(webhookData.corrected_duration, 10);
+    }
+    
+    // Update completedAt if end_at is provided
+    if (webhookData.end_at) {
+      lastInterview.completedAt = new Date(webhookData.end_at);
     }
     
     // When call is completed, fetch full details including recording
